@@ -532,10 +532,18 @@ func (s *store) ownBinding(sister, verified, code string) (binding, bool) {
 	return s.bindingOf(callerBot(sister, verified), code)
 }
 
+// ownBindingFor is ownBinding for tool, with an error that says what is wrong (see bindingErr).
+func (s *store) ownBindingFor(tool, sister, verified, code string) (binding, error) {
+	if b, ok := s.ownBinding(sister, verified, code); ok {
+		return b, nil
+	}
+	return binding{}, s.bindingErr(tool, callerBot(sister, verified), strings.TrimSpace(code))
+}
+
 func (s *sisters) unbindTool(_ context.Context, h sisterHost, in unbindIn) (any, error) {
-	b, ok := s.st.ownBinding(in.Sister, in.VerifiedAgent, in.BindCode)
-	if !ok {
-		return nil, errors.New("no binding with that sister and code (the user can unbind in the panel)")
+	b, err := s.st.ownBindingFor("claude_code_unbind", in.Sister, in.VerifiedAgent, in.BindCode)
+	if err != nil {
+		return nil, fmt.Errorf("%w (the user can unbind in the panel)", err)
 	}
 	if _, err := s.st.unbind(b.Sister); err != nil {
 		return nil, err
@@ -557,9 +565,9 @@ type sendIn struct {
 }
 
 func (s *sisters) sendTool(ctx context.Context, h sisterHost, in sendIn) (any, error) {
-	b, ok := s.st.ownBinding(in.Sister, in.VerifiedAgent, in.BindCode)
-	if !ok {
-		return nil, errors.New("not bound: bind to a session first (claude_code_bind), then pass the bind_code you got")
+	b, err := s.st.ownBindingFor("claude_code_send", in.Sister, in.VerifiedAgent, in.BindCode)
+	if err != nil {
+		return nil, err
 	}
 	text := strings.TrimSpace(in.Text)
 	if text == "" {
@@ -673,9 +681,9 @@ type statusIn struct {
 
 // statusTool says how the bound session stands and when a message to it would be read.
 func (s *sisters) statusTool(ctx context.Context, h sisterHost, in statusIn) (any, error) {
-	b, ok := s.st.ownBinding(in.Sister, in.VerifiedAgent, in.BindCode)
-	if !ok {
-		return nil, errors.New("not bound: bind to a session first (claude_code_bind), then pass the bind_code you got")
+	b, err := s.st.ownBindingFor("claude_code_status", in.Sister, in.VerifiedAgent, in.BindCode)
+	if err != nil {
+		return nil, err
 	}
 	if !s.allow("status|"+b.Sister, statusPerHour) {
 		return nil, fmt.Errorf("at most %d status checks an hour; the claude_message events say when a message is delivered and answered", statusPerHour)

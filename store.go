@@ -2,10 +2,13 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,7 +18,10 @@ type pluginState struct {
 	Mandates []mandate      `json:"mandates,omitempty"`
 	Projects []projectTrust `json:"project_trusts,omitempty"`
 	Bindings []binding      `json:"bindings,omitempty"`
-	Aliases  []alias        `json:"session_names,omitempty"`
+	// Retired are the bind codes of bindings that were replaced or removed (by hash; bounded), so a Bot that sends
+	// an old code learns that it is old instead of "unknown".
+	Retired []retiredCode `json:"retired_bind_codes,omitempty"`
+	Aliases []alias       `json:"session_names,omitempty"`
 	// RolePending are the role changes waiting for the user's approval (roles_change.go); bounded.
 	RolePending []rolePending `json:"role_pending,omitempty"`
 	// SSHAuditSeq is, per computer, the last Rubi Home SSH audit sequence number copied into Rubi's audit log.
@@ -274,10 +280,53 @@ func (s *store) bind(b binding) error {
 	for _, x := range s.st.Bindings {
 		if !sameBot(x.Sister, b.Sister) {
 			kept = append(kept, x)
+		} else if x.Code != b.Code {
+			s.retireLocked(x, "replaced by a new binding", b.Since)
 		}
 	}
 	s.st.Bindings = append(kept, b)
+	s.unretireLocked(b.Code) // a binding put back (its new code couldn't be delivered) is current again
 	return s.saveLocked()
+}
+
+// retiredCode is a bind code that no longer works, by hash: the code itself is not kept.
+type retiredCode struct {
+	Sister string    `json:"sister"`
+	Hash   string    `json:"hash"`
+	Why    string    `json:"why"`
+	At     time.Time `json:"at"`
+	Title  string    `json:"title,omitempty"`
+}
+
+const maxRetired = 32
+
+func codeHash(code string) string {
+	sum := sha256.Sum256([]byte(code))
+	return hex.EncodeToString(sum[:])
+}
+
+func (s *store) retireLocked(b binding, why string, at time.Time) {
+	if b.Code == "" {
+		return
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	s.st.Retired = append(s.st.Retired, retiredCode{Sister: b.Sister, Hash: codeHash(b.Code), Why: why, At: at, Title: b.Title})
+	if len(s.st.Retired) > maxRetired {
+		s.st.Retired = s.st.Retired[len(s.st.Retired)-maxRetired:]
+	}
+}
+
+func (s *store) unretireLocked(code string) {
+	h := codeHash(code)
+	kept := s.st.Retired[:0]
+	for _, r := range s.st.Retired {
+		if r.Hash != h {
+			kept = append(kept, r)
+		}
+	}
+	s.st.Retired = kept
 }
 
 func (s *store) unbind(sister string) (bool, error) {
@@ -288,6 +337,7 @@ func (s *store) unbind(sister string) (bool, error) {
 	for _, x := range s.st.Bindings {
 		if sameBot(x.Sister, sister) {
 			found = true
+			s.retireLocked(x, "unbound", time.Time{})
 			continue
 		}
 		kept = append(kept, x)
@@ -315,6 +365,52 @@ func (s *store) bindingOf(sister, code string) (binding, bool) {
 		}
 	}
 	return binding{}, false
+}
+
+// bindingErr says why code doesn't open a binding of the Bot sister, for the tool's error: the code is missing, the
+// Bot has no binding, the code is an old one of the Bot's (replaced or unbound), another Bot's, or unknown.
+func (s *store) bindingErr(tool, sister, code string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	who := firstNonEmpty(strings.TrimSpace(sister), "your Bot")
+	var own *binding
+	for i := range s.st.Bindings {
+		if sameBot(s.st.Bindings[i].Sister, sister) {
+			own = &s.st.Bindings[i]
+		}
+	}
+	current := ""
+	if own != nil {
+		current = fmt.Sprintf("%s is bound to %q (session %s) since %s", who, oneLine(firstNonEmpty(own.Title, own.Cwd, own.SessionID), 80), own.SessionID, own.Since.UTC().Format(time.RFC3339))
+	}
+	var retired *retiredCode
+	other := false
+	if code != "" {
+		h := codeHash(code)
+		for i := range s.st.Retired {
+			if s.st.Retired[i].Hash == h && sameBot(s.st.Retired[i].Sister, sister) {
+				retired = &s.st.Retired[i]
+			}
+		}
+		for _, b := range s.st.Bindings {
+			if !sameBot(b.Sister, sister) && subtle.ConstantTimeCompare([]byte(b.Code), []byte(code)) == 1 {
+				other = true
+			}
+		}
+	}
+	switch {
+	case code == "" && own != nil:
+		return fmt.Errorf("%s: missing bind_code: %s; pass the bind_code from the claude_bound event of that binding", tool, current)
+	case retired != nil && own != nil:
+		return fmt.Errorf("%s: superseded bind_code: it belonged to an earlier binding of %s (%s on %s); %s: use the bind_code from the claude_bound event of that binding", tool, who, retired.Why, retired.At.UTC().Format(time.RFC3339), current)
+	case retired != nil:
+		return fmt.Errorf("%s: not bound: the binding of %s with this bind_code was %s on %s; bind again with claude_code_bind", tool, who, retired.Why, retired.At.UTC().Format(time.RFC3339))
+	case other:
+		return fmt.Errorf("%s: bind_code of another Bot: this code belongs to another Bot's binding, not to %s", tool, who)
+	case own != nil:
+		return fmt.Errorf("%s: unknown bind_code: %s, but this isn't its bind_code", tool, current)
+	}
+	return fmt.Errorf("%s: not bound: %s has no binding in the plugin's saved state; bind to a session with claude_code_bind, then pass the bind_code you get", tool, who)
 }
 
 // follow records the session's current Claude Code id for a binding by app id.
