@@ -241,6 +241,10 @@ func main() {
 		func(ctx context.Context, h *rubiplugin.Host, in startIn) (any, error) {
 			return sis.startTool(ctx, h, in)
 		})
+	rubiplugin.AddTool(p, "claude_code_project_add", "Ask the user (one strong approval) to add a folder on their computer as a project of the agent path (Claude in project VMs), when the user tells you which folder the agents should work in. Pass dir, the folder's absolute path. Rubi Home refuses system folders, the home folder itself and private folders in it. Then the folder is a project: claude_code_start and claude_code_role_create can use it. At most 5 requests an hour.",
+		func(ctx context.Context, h *rubiplugin.Host, in projectAddIn) (any, error) {
+			return sis.projectAddTool(ctx, h, in)
+		})
 	rubiplugin.AddTool(p, "claude_code_rename", "Give a Claude Code session a name in Rubi (an alias: Claude Code itself is not changed), or remove it (clear). The name shows in claude_code_sessions and claude_code_bind accepts it instead of session_id. 1 to 64 plain characters, unique on the computer ignoring case, not like an id. Without session_id or session_name it names the session you are bound to, which needs no approval; any other session needs a tap from the user (none inside a project the user trusts if you are bound inside it).",
 		func(ctx context.Context, h *rubiplugin.Host, in renameIn) (any, error) {
 			return sis.renameTool(ctx, h, in)
