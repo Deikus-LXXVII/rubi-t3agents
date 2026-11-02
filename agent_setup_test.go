@@ -192,8 +192,19 @@ func TestSetupPageStates(t *testing.T) {
 	// All done but the sign-in: one sign-in button for the computer (no Console one), self-test per project.
 	f, s = setupFixture(t, allDone())
 	a = allActions(setupView(t, s, f))
-	if a["Sign in with a Claude subscription"] == nil || a["Run self-test"] == nil || a["Remove"] == nil || a["Add a folder"] == nil || a["Set up everything"] == nil {
+	if a["Sign in with a Claude subscription"] == nil || a["Run self-test"] == nil || a["Remove"] == nil || a["Set up everything"] == nil {
 		t.Fatalf("%v", a)
+	}
+	// The folders are no step: no "Add a folder" (a Bot adds folders), no numbered section; listed with Remove.
+	if a["Add a folder"] != nil {
+		t.Error("the setup asks the user to choose a folder")
+	}
+	var titles []string
+	for _, sec := range setupView(t, s, f)["sections"].([]map[string]any) {
+		titles = append(titles, sec["title"].(string))
+	}
+	if j := strings.Join(titles, "|"); !strings.Contains(j, "|3. Runner image|4. Claude sign-in|5. Self-test|") || !strings.Contains(j, "|Project folders") || strings.Contains(j, ". Projects") {
+		t.Errorf("sections %s", j)
 	}
 	if a["Sign in with an Anthropic Console account"] != nil || a["Sign out"] != nil || a["Install"] != nil || a["Start"] != nil || a["Check the sign-in"] != nil {
 		t.Error("button that doesn't belong")
@@ -257,7 +268,7 @@ func TestSetupPageWorkingAndSignIn(t *testing.T) {
 	secs := pg["sections"].([]map[string]any)
 	var login []map[string]any
 	for _, sec := range secs {
-		if strings.HasPrefix(sec["title"].(string), "6.") {
+		if strings.HasSuffix(sec["title"].(string), ". Claude sign-in") {
 			login = sec["items"].([]map[string]any)
 		}
 	}
@@ -281,6 +292,14 @@ func TestSetupPageWorkingAndSignIn(t *testing.T) {
 		if strings.Contains(aa["label"].(string), "claude.com") {
 			t.Error("link in a label")
 		}
+	}
+	// The code box comes with the link, also when Rubi Home didn't recognize claude's prompt (claude 2.1 draws it
+	// with cursor moves, which an older helper missed: the user had a link and nowhere to paste the code).
+	st["login"] = map[string]any{"url": "https://claude.com/oauth?state=abc", "wants_code": false}
+	f.setup.status = st
+	a = allActions(setupView(t, s, f))
+	if a["Open the sign-in page"] == nil || a["Paste the code"] == nil || a["Paste the code"]["prompt"] == nil {
+		t.Errorf("no code box with the link: %v", a)
 	}
 	// A link that isn't https is not shown and not offered.
 	st["login"] = map[string]any{"url": "javascript:alert(1)", "wants_code": false}

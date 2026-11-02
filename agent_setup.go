@@ -31,7 +31,7 @@ const (
 	auditSetup     = "agent_setup_action"
 	setupProbeWait = 15 * time.Second // a status call probes the whole machine
 	setupGrace     = 30 * time.Minute // a computer known to have the capability stays listed through a slow probe that long
-	setupURLRunes  = 450              // the panel cuts an item's detail at 600 characters
+	setupURLRunes  = 400              // the panel cuts an item's detail at 600 characters
 	setupAddWait   = 11 * time.Minute // Rubi Home's folder chooser waits 10 minutes for the user
 	setupProgress  = 20               // progress lines shown per step
 	setupLineRunes = 200
@@ -200,7 +200,7 @@ func (s *sisters) setupDevice(ctx context.Context, h sisterHost, device string) 
 func (s *sisters) setupLinkSection(ctx context.Context, h sisterHost) []map[string]any {
 	var items []map[string]any
 	for _, d := range s.setupDevices(ctx, h) {
-		items = append(items, map[string]any{"title": "Set up the agent path", "detail": oneLine("On "+d.Name+": Apple's container tool, the runner image, a folder, Claude's sign-in and a self-test, with buttons only.", 300),
+		items = append(items, map[string]any{"title": "Set up the agent path", "detail": oneLine("On "+d.Name+": Apple's container tool, the runner image, Claude's sign-in and a self-test, with buttons only.", 300),
 			"actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageSetup, Device: d.ID}.open()}}})
 	}
 	if len(items) == 0 {
@@ -305,9 +305,18 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 	allNote := "\"Set up everything\" appears once the container tool is done: that step asks for your approval, and it never skips it."
 	sections := []map[string]any{{"title": "Setup", "note": allNote, "empty": "Nothing is running now.", "items": top, "actions": topActions}}
 
-	for i, step := range st.Steps {
+	// The folders the agents work in are no step of the setup: a Bot adds one when the user asks it
+	// (claude_code_project_add, with the user's approval). They are listed after the steps, with Remove.
+	var folders *setupStep
+	n := 0
+	for _, step := range st.Steps {
 		key := stepKey(step.ID)
-		title := fmt.Sprintf("%d. %s", i+1, firstNonEmpty(setupTitles[key], oneLine(step.Title, 60), oneLine(step.ID, 40)))
+		if key == "projects" {
+			folders = &step
+			continue
+		}
+		n++
+		title := fmt.Sprintf("%d. %s", n, firstNonEmpty(setupTitles[key], oneLine(step.Title, 60), oneLine(step.ID, 40)))
 		label, known := setupStates[step.State]
 		if !known {
 			label = "unknown"
@@ -327,8 +336,6 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 				actions = append(actions, act("Start", "setup_run", map[string]any{"device": d.ID, "step": "service"}))
 			case "build":
 				actions = append(actions, act(ifElse(step.State == "done", "Update", "Build"), "setup_run", map[string]any{"device": d.ID, "step": "image"}))
-			case "add":
-				actions = append(actions, act("Add a folder", "setup_add", dev()))
 			case "check":
 				actions = append(actions, act("Check the sign-in", "setup_run", map[string]any{"device": d.ID, "step": "login"}))
 			case "login", "login_again":
@@ -357,7 +364,7 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 			projects = projects[:20]
 		}
 		for _, pr := range projects {
-			if key != "projects" && key != "selftest" { // the sign-in is one row for the computer
+			if key != "selftest" { // the sign-in is one row for the computer
 				break
 			}
 			it := map[string]any{"title": name(pr.ID, pr.Dir)}
@@ -406,9 +413,12 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 					detail += " (shortened here; the button opens the whole link)"
 				}
 				wact = append(wact, act("Open the sign-in page", "setup_open", dev()))
-			}
-			if st.Login.WantsCode {
-				detail += " Claude shows a code on its page: paste it here."
+				// The code box is there as soon as the link is: claude asks for the code right after it shows the
+				// link, and Rubi Home's helper may not recognize that prompt (its drawing changes between versions).
+				detail += " After you sign in, Claude shows a code on its page: paste it here."
+				if st.Login.WantsCode {
+					detail = strings.Replace(detail, "After you sign in, Claude shows", "Claude is waiting for the code: it shows", 1)
+				}
 				wact = append(wact, map[string]any{"label": "Paste the code", "op": "setup_code", "args": dev(),
 					"prompt": map[string]any{"arg": "code", "label": "Paste the code shown on the Claude page", "value": ""}})
 			}
@@ -417,6 +427,9 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 		}
 		sections = append(sections, map[string]any{"title": title, "empty": "", "items": items})
 	}
+	if folders != nil {
+		sections = append(sections, s.setupFoldersSection(*folders, d.ID, busy))
+	}
 	if len(st.Steps) == 0 {
 		sections = append(sections, map[string]any{"title": "Steps", "empty": "This computer reported no steps."})
 	}
@@ -424,7 +437,7 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 		sections = append(sections, sec)
 	}
 	page := map[string]any{"title": "Set up the agent path: " + oneLine(d.Name, 60), "up": upMain,
-		"note": "The sign-in is one for every project on this computer, with a Claude subscription, for your own personal use under Anthropic's terms. The token stays in Rubi Home on that computer: the agents' VMs never hold it, Rubi Home adds it to their requests to Anthropic. Install shows macOS's own administrator dialog on the computer: this page never asks for a password. Install and Add a folder ask for your strong approval first.", "sections": sections}
+		"note": "The sign-in is one for every project on this computer, with a Claude subscription, for your own personal use under Anthropic's terms. The token stays in Rubi Home on that computer: the agents' VMs never hold it, Rubi Home adds it to their requests to Anthropic. Install shows macOS's own administrator dialog on the computer: this page never asks for a password. Install asks for your strong approval first. The folders the agents work in are added by your Grok Bot when you ask it, each with your strong approval.", "sections": sections}
 	if busy || st.Login != nil {
 		page["refresh"] = 3
 	}
@@ -441,6 +454,8 @@ type setupArgs struct {
 type setupTicket struct {
 	Device     string `json:"device"`
 	DeviceName string `json:"device_name"`
+	// Dir is the folder a Bot asked to add (claude_code_project_add); "" for the folder chooser on the computer.
+	Dir string `json:"dir,omitempty"`
 }
 
 func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a setupArgs) (any, error) {
@@ -565,7 +580,11 @@ func (s *sisters) executeSetupInstall(ctx context.Context, h sisterHost, t setup
 }
 
 func (s *sisters) executeSetupProject(ctx context.Context, h sisterHost, t setupTicket) (any, error) {
-	return s.executeSetup(ctx, h, t, opSetupAdd, map[string]any{}, "add a folder", setupAddWait)
+	args := map[string]any{}
+	if t.Dir != "" {
+		args["dir"] = t.Dir // core checks it against this very approval
+	}
+	return s.executeSetup(ctx, h, t, opSetupAdd, args, "add a folder", setupAddWait)
 }
 
 func (s *sisters) executeSetup(ctx context.Context, h sisterHost, t setupTicket, op string, args map[string]any, action string, wait time.Duration) (any, error) {
@@ -579,6 +598,26 @@ func (s *sisters) executeSetup(ctx context.Context, h sisterHost, t setupTicket,
 
 // setupModeSection is the usage mode of the computer (the default and what "all Bots" means), set here once for
 // all Bots: the user's own button, the same op as the modes page. Hidden when the computer lacks claude-agent.
+// setupFoldersSection lists the agents' project folders with Remove; adding one is the Bot's (claude_code_project_add).
+func (s *sisters) setupFoldersSection(step setupStep, device string, busy bool) map[string]any {
+	var items []map[string]any
+	projects := step.Projects
+	if len(projects) > 20 {
+		projects = projects[:20]
+	}
+	for _, pr := range projects {
+		it := map[string]any{"title": firstNonEmpty(oneLine(pr.Dir, 120), oneLine(pr.ID, 60))}
+		if !busy && pr.ID != "" && pr.Action == "remove" {
+			it["actions"] = []map[string]any{{"label": "Remove", "op": "setup_remove", "args": map[string]any{"device": device, "project": pr.ID}, "danger": true,
+				"confirm": "Remove this folder from the agent projects? Its files stay where they are."}}
+		}
+		items = append(items, it)
+	}
+	return map[string]any{"title": "Project folders", "items": items,
+		"empty": "No folder yet. Ask your Grok Bot to add the folder you want the agents to work in; you approve it with your passkey.",
+		"note":  "Your Grok Bot adds a folder when you ask it to, and you approve each one. Rubi Home refuses system folders, your home folder itself and private folders in it."}
+}
+
 func (s *sisters) setupModeSection(ctx context.Context, h sisterHost, device string) map[string]any {
 	cctx, cancel := context.WithTimeout(ctx, panelListTimeout)
 	defer cancel()
