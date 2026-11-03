@@ -1,10 +1,7 @@
 package main
 
-// Session names (claude_code_rename). Claude Code has no documented way for another process to rename a
-// session (/rename and --name work from inside Claude Code only; the desktop app's titles and
-// ~/.claude/sessions are not ours to write), so a name here is an alias Rubi keeps for a session on a
-// computer: it shows in claude_code_sessions next to the title, and claude_code_bind accepts it instead of a
-// session id. It never reaches Claude Code.
+// Session names (t3_rename). A name is an alias Rubi keeps for a T3 thread on a computer (the runner's own title is
+// set beside it): it shows in t3_sessions next to the title, and t3_bind accepts it instead of a thread id.
 
 import (
 	"context"
@@ -21,20 +18,15 @@ import (
 )
 
 const (
-	kindRename       = "claude-code.rename"
+	kindRename       = "t3agents.rename"
 	maxNameRunes     = 64
 	maxAliases       = 500
-	aliasTTL         = 30 * 24 * time.Hour // an alias whose session was not listed this long is dropped
-	aliasSeenEvery   = time.Hour           // how often a listing refreshes an alias's last-seen time
-	sweepEvery       = 10 * time.Minute    // how often a full list is read to look for stale names
-	nameListReuse    = 5 * time.Minute     // how long the panel's name page reuses the session list
 	renamesPerHour   = 20
 	panelListTimeout = 10 * time.Second
 	auditRenamed     = "session_renamed"
 )
 
-// alias is a user- or Bot-chosen name for one session on one computer. The session is known by its Claude
-// Code id and, for a desktop session, the app's id, which stays when the app restarts it under a new one.
+// alias is a user- or Bot-chosen name for one thread on one computer, known by its thread id.
 type alias struct {
 	Device       string `json:"device"`
 	DeviceName   string `json:"device_name,omitempty"`
@@ -49,7 +41,7 @@ type alias struct {
 	Title   string    `json:"title,omitempty"`
 	Set     time.Time `json:"set"`
 	Seen    time.Time `json:"seen"`
-	// Project is the agent project of the session (claude-agent); such a name is not swept by the hook
+	// Project is the agent project of the session (t3-agent); such a name is not swept by the hook
 	// session lists.
 	Project string `json:"project,omitempty"`
 }
@@ -241,194 +233,7 @@ func (s *store) clearAliasExact(device, name string) (bool, error) {
 	return true, nil
 }
 
-// deviceList is one computer's session list. Complete means it holds every session (archived included) and
-// the computer answered, so a session missing from it is gone, not just filtered out.
-type deviceList struct {
-	device   string
-	sessions []session
-	complete bool
-}
-
-// sweepAliases records which named sessions were just seen (refreshing their ids and last-seen time) and
-// drops the names of sessions missing from a complete list, or of a computer that wasn't asked at all, for
-// longer than aliasTTL. It returns the dropped ones.
-func (s *store) sweepAliases(now time.Time, lists []deviceList) []alias {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.st.Aliases) == 0 {
-		return nil
-	}
-	byDev := map[string]deviceList{}
-	for _, l := range lists {
-		byDev[l.device] = l
-	}
-	var dropped []alias
-	changed := false
-	kept := make([]alias, 0, len(s.st.Aliases))
-	for _, a := range s.st.Aliases {
-		l, asked := byDev[a.Device]
-		var hit *session
-		for i := range l.sessions {
-			if a.is(a.Device, l.sessions[i]) {
-				hit = &l.sessions[i]
-				break
-			}
-		}
-		switch {
-		case a.Project != "": // an agent session: the hook lists say nothing about it
-		case hit != nil:
-			if hit.SessionID != "" && hit.SessionID != a.SessionID || hit.AppSessionID != "" && hit.AppSessionID != a.AppSessionID ||
-				now.Sub(a.Seen) >= aliasSeenEvery {
-				a.SessionID, a.AppSessionID = firstNonEmpty(hit.SessionID, a.SessionID), firstNonEmpty(hit.AppSessionID, a.AppSessionID)
-				a.Cwd, a.RepoKey, a.Title = firstNonEmpty(hit.Cwd, a.Cwd), firstNonEmpty(hit.RepoKey, a.RepoKey), firstNonEmpty(oneLine(hit.Title, 200), a.Title)
-				a.Seen = now
-				changed = true
-			}
-		case (!asked || l.complete) && now.Sub(a.Seen) > aliasTTL:
-			dropped = append(dropped, a)
-			changed = true
-			continue
-		}
-		kept = append(kept, a)
-	}
-	if changed {
-		s.st.Aliases = kept
-		_ = s.saveLocked()
-	}
-	return dropped
-}
-
 // ---- resolving a name ----
-
-// lookupSession finds a session by Claude Code id or app id and returns the computers' lists it read, so the
-// caller can check names against them and sweep stale names.
-func lookupSession(ctx context.Context, h sisterHost, device, id string) (rubiplugin.HomeDevice, session, []deviceSessions, error) {
-	all, err := listSessions(ctx, h, "", true)
-	if err != nil {
-		return rubiplugin.HomeDevice{}, session{}, nil, err
-	}
-	for _, ds := range all {
-		if device != "" && ds.device.ID != device && ds.device.Name != device {
-			continue
-		}
-		for _, s := range ds.list {
-			if id != "" && (s.SessionID == id || s.AppSessionID == id) {
-				return ds.device, s, all, nil
-			}
-		}
-	}
-	return rubiplugin.HomeDevice{}, session{}, all, errors.New("no such Claude Code session on your computers (list them with claude_code_sessions)")
-}
-
-// sweepWanted says whether a full list (archived sessions included) should be read now to look for stale
-// names: only when names exist, and at most every sweepEvery.
-func (s *sisters) sweepWanted() bool {
-	if len(s.st.aliases()) == 0 {
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.now().Sub(s.lastSweep) >= sweepEvery
-}
-
-// sweep feeds session lists to the alias bookkeeping: every listed named session is noted as seen. Names are
-// dropped only when full says the lists hold every session (no repo filter, archived included) and a list is
-// whole: its computer answered and Rubi Home did not say it was cut or stale. A list that is not whole never
-// proves a session gone.
-func (s *sisters) sweep(h sisterHost, all []deviceSessions, full bool) {
-	var lists []deviceList
-	whole := full
-	for _, ds := range all {
-		ok := full && ds.err == nil && !ds.partial
-		whole = whole && ok
-		lists = append(lists, deviceList{device: ds.device.ID, sessions: ds.list, complete: ok})
-	}
-	if full && len(all) > 0 && whole {
-		s.mu.Lock()
-		s.lastSweep = s.now()
-		s.mu.Unlock()
-	}
-	for _, a := range s.st.sweepAliases(s.now(), lists) {
-		h.Audit("session_name_expired", map[string]any{"device": a.Device, "name": oneLine(a.Name, maxNameRunes), "session": a.SessionID})
-	}
-}
-
-// resolveSession finds the session a Bot means by session_id or by a name (not both). A name is looked up
-// among the aliases of the computer (device narrows it; without one a name used on several computers is
-// ambiguous). Errors say what to do.
-func (s *sisters) resolveSession(ctx context.Context, h sisterHost, device, id, name string) (rubiplugin.HomeDevice, session, []deviceSessions, error) {
-	none := rubiplugin.HomeDevice{}
-	id, name = strings.TrimSpace(id), strings.TrimSpace(name)
-	switch {
-	case id != "" && name != "":
-		return none, session{}, nil, errors.New("pass session_id or name, not both")
-	case id == "" && name == "":
-		return none, session{}, nil, errors.New("pass session_id, or the name of a named session (claude_code_sessions shows both)")
-	case id != "":
-		d, sess, all, err := lookupSession(ctx, h, device, id)
-		if all != nil {
-			s.sweep(h, all, s.sweepWanted())
-		}
-		return d, sess, all, err
-	}
-	devID := ""
-	if device != "" {
-		d, err := s.pickDevice(h, device)
-		if err != nil {
-			return none, session{}, nil, err
-		}
-		devID = d.ID
-	}
-	found := s.st.aliasesNamed(devID, name)
-	switch len(found) {
-	case 0:
-		return none, session{}, nil, fmt.Errorf("no session is named %q%s", oneLine(name, maxNameRunes), s.knownNames(devID))
-	case 1:
-	default:
-		var where []string
-		for _, a := range found {
-			where = append(where, firstNonEmpty(a.DeviceName, a.Device))
-		}
-		return none, session{}, nil, fmt.Errorf("%q names sessions on several computers (%s): pass device", oneLine(name, maxNameRunes), strings.Join(where, ", "))
-	}
-	a := found[0]
-	d, sess, all, err := lookupSession(ctx, h, a.Device, firstNonEmpty(a.AppSessionID, a.SessionID))
-	if err != nil && a.AppSessionID != "" && a.SessionID != "" {
-		d, sess, all, err = lookupSession(ctx, h, a.Device, a.SessionID)
-	}
-	if all != nil {
-		s.sweep(h, all, s.sweepWanted())
-	}
-	if err != nil {
-		// Not in the list. If the computer's list can't prove it (cut, stale, or the computer didn't answer), the
-		// stored ids are the best there is: use them, with what the session looked like when last seen.
-		for _, ds := range all {
-			if ds.device.ID == a.Device && (ds.partial || ds.err != nil) {
-				return ds.device, session{SessionID: a.SessionID, AppSessionID: a.AppSessionID, Title: a.Title, Cwd: a.Cwd, RepoKey: a.RepoKey,
-					Role: "unknown", State: "unknown"}, all, nil
-			}
-		}
-		return none, session{}, all, fmt.Errorf("the session named %q isn't there any more (a name goes after %d days without its session); list sessions with claude_code_sessions", oneLine(name, maxNameRunes), int(aliasTTL.Hours()/24))
-	}
-	return d, sess, all, nil
-}
-
-func (s *sisters) knownNames(device string) string {
-	var names []string
-	for _, a := range s.st.aliases() {
-		if device == "" || a.Device == device {
-			names = append(names, fmt.Sprintf("%q", oneLine(a.Name, maxNameRunes)))
-		}
-	}
-	slices.Sort(names)
-	if len(names) == 0 {
-		return " (no session has a name yet; use claude_code_rename or the Rubi panel)"
-	}
-	if len(names) > 10 {
-		names = append(names[:10], "…")
-	}
-	return " (named sessions: " + strings.Join(names, ", ") + ")"
-}
 
 // ---- the tool ----
 
@@ -436,7 +241,7 @@ type renameIn struct {
 	Agent         string `json:"rubi_agent" jsonschema:"your Bot name as connected to Rubi"`
 	AgentCode     string `json:"rubi_agent_code,omitempty" jsonschema:"the agent_code of your latest Rubi webhook (or call rubi_verify with your name to get one); proves you are that Bot"`
 	VerifiedAgent string `json:"rubi_verified_agent,omitempty" jsonschema:"set by Rubi; don't pass it"`
-	SessionID     string `json:"session_id,omitempty" jsonschema:"the session to name: session_id or app_session_id from claude_code_sessions. Leave out (with session_name) for the session you are bound to"`
+	SessionID     string `json:"session_id,omitempty" jsonschema:"the session to name: the thread's session_id from t3_sessions. Leave out (with session_name) for the session you are bound to"`
 	SessionName   string `json:"session_name,omitempty" jsonschema:"the session's current name, instead of session_id"`
 	Device        string `json:"device,omitempty" jsonschema:"the computer, when there are several"`
 	Project       string `json:"project,omitempty" jsonschema:"for a Claude session in a project VM: its project (id or directory)"`
@@ -452,7 +257,7 @@ type renameTicket struct {
 	AppSessionID string `json:"app_session_id,omitempty"`
 	Name         string `json:"name,omitempty"`
 	Clear        bool   `json:"clear,omitempty"`
-	Project      string `json:"project,omitempty"` // an agent project (claude-agent)
+	Project      string `json:"project,omitempty"` // an agent project (t3-agent)
 	Role         string `json:"role,omitempty"`    // the isolated role of that session
 }
 
@@ -491,8 +296,7 @@ func (s *sisters) renameTool(ctx context.Context, h sisterHost, in renameIn) (an
 		d    rubiplugin.HomeDevice
 		sess session
 		all  []deviceSessions
-		err  error
-		// project is set when the session is an agent session (claude-agent).
+		// project is set when the session is an agent session (t3-agent).
 		project string
 		role    string // and its isolated role, if any
 	)
@@ -522,20 +326,22 @@ func (s *sisters) renameTool(ctx context.Context, h sisterHost, in renameIn) (an
 			}
 			agentTarget(ref)
 		} else {
-			key := firstNonEmpty(mine.AppSessionID, mine.SessionID)
-			if d, sess, all, err = lookupSession(ctx, h, mine.Device, key); err != nil {
-				return nil, fmt.Errorf("the session you are bound to isn't there any more (%v)", err)
-			}
-			s.sweep(h, all, s.sweepWanted())
+			return nil, errNotThread
 		}
 	} else {
 		id, nm := strings.TrimSpace(in.SessionID), strings.TrimSpace(in.SessionName)
+		if id != "" && nm != "" {
+			return nil, errors.New("pass session_id or session_name, not both")
+		}
+		if err := s.nameOnSeveralComputers(in.Device, nm); err != nil {
+			return nil, err
+		}
 		if ref, found, err := s.resolveAgent(ctx, h, in.Device, in.Project, id, nm); err != nil {
 			return nil, err
 		} else if found {
 			agentTarget(ref)
-		} else if d, sess, all, err = s.resolveSession(ctx, h, in.Device, id, nm); err != nil {
-			return nil, err
+		} else {
+			return nil, s.noThread(h, in.Device, id, nm)
 		}
 	}
 	// Counted only now, for a real session: a typo in an id doesn't use up the hour.
@@ -568,14 +374,8 @@ func (s *sisters) renameTool(ctx context.Context, h sisterHost, in renameIn) (an
 	}
 	// 2. A session inside a project the user trusts, for a Bot bound inside it.
 	if mayAlone {
-		var pt *projectTrust
-		if project != "" {
-			pt = s.agentProjectCovering(d.ID, sister, project)
-		} else {
-			pt = s.projectCovering(ctx, h, d.ID, sister, sess.Cwd, sess.RealCwd)
-		}
-		if pt != nil {
-			h.Audit(auditMandateAll, map[string]any{"mandate": pt.ID, "project": pt.Root, "device": d.ID, "sister": sister, "action": "claude_code_rename",
+		if pt := s.agentProjectCovering(d.ID, sister, project); pt != nil {
+			h.Audit(auditMandateAll, map[string]any{"mandate": pt.ID, "project": pt.Root, "device": d.ID, "sister": sister, "action": "t3_rename",
 				"session": sess.SessionID, "directory": sess.Cwd, "uses": pt.Uses})
 			res, err := s.executeRename(ctx, h, t, "bot", "project trust "+pt.ID, all)
 			if m, ok := res.(map[string]any); ok && err == nil {
@@ -593,7 +393,7 @@ func (s *sisters) renameTool(ctx context.Context, h sisterHost, in renameIn) (an
 	}
 	preview := map[string]any{"bot": sister, "computer": d.Name, "session": sess.SessionID, "title": sess.Title, "directory": sess.Cwd,
 		"current_name": old.Name, "new_name": name,
-		"what_it_does": what + ". It is a label kept in Rubi, shown in session lists and usable instead of the session's id; it changes nothing in Claude Code or the desktop app."}
+		"what_it_does": what + ". It is a label kept in Rubi, shown in session lists and usable instead of the session's id; it changes nothing in T3."}
 	if old.Name != "" {
 		preview["current_name_set_by"] = firstNonEmpty(old.SetBy, "unknown")
 	}
@@ -620,7 +420,6 @@ func (s *sisters) executeRename(ctx context.Context, h sisterHost, t renameTicke
 		if old != "" {
 			h.Audit(auditRenamed, map[string]any{"device": t.Device, "session": t.SessionID, "old": oneLine(old, maxNameRunes), "new": "", "by": by, "sister": t.Sister, "approval": why})
 		}
-		s.dropNameList()
 		return map[string]any{"cleared": old != "", "session_id": t.SessionID, "previous_name": old}, nil
 	}
 	name, err := checkAliasName(t.Name)
@@ -647,24 +446,6 @@ func (s *sisters) executeRename(ctx context.Context, h sisterHost, t renameTicke
 			return nil, fmt.Errorf("Rubi Home didn't rename the session (%v); nothing changed", err)
 		}
 		all = nil
-	} else if all == nil {
-		lctx, cancel := context.WithTimeout(ctx, panelListTimeout)
-		defer cancel()
-		var lerr error
-		_, _, all, lerr = lookupSession(lctx, h, t.Device, firstNonEmpty(t.AppSessionID, t.SessionID))
-		got := false
-		for _, ds := range all {
-			if ds.device.ID == t.Device {
-				if ds.err != nil {
-					lerr = ds.err
-				} else {
-					got = true
-				}
-			}
-		}
-		if !got {
-			return nil, fmt.Errorf("couldn't check the name against the computer's sessions (%v); try again", lerr)
-		}
 	}
 	if all != nil {
 		if err := freeName(name, all, t.Device); err != nil {
@@ -680,11 +461,75 @@ func (s *sisters) executeRename(ctx context.Context, h sisterHost, t renameTicke
 		return nil, err
 	}
 	h.Audit(auditRenamed, map[string]any{"device": t.Device, "session": t.SessionID, "old": oneLine(old.Name, maxNameRunes), "new": name, "by": by, "sister": t.Sister, "approval": why})
-	s.dropNameList()
 	out := map[string]any{"renamed": true, "session_id": t.SessionID, "name": name,
-		"next_step": "claude_code_sessions now shows this name, and claude_code_bind accepts it as name."}
+		"next_step": "t3_sessions now shows this name, and t3_bind accepts it as name."}
 	if old.Name != "" {
 		out["previous_name"] = old.Name
 	}
 	return out, nil
+}
+
+// noThread is the answer when no T3 thread matches what a Bot named: by id, or by a name, with the reason a name
+// failed. device narrows a name to one computer (without one, a name used on several computers is ambiguous).
+func (s *sisters) noThread(h sisterHost, device, id, name string) error {
+	id, name = strings.TrimSpace(id), strings.TrimSpace(name)
+	switch {
+	case id != "" && name != "":
+		return errors.New("pass session_id or name, not both")
+	case id == "" && name == "":
+		return errors.New("pass session_id, or the name of a named session (t3_sessions shows both)")
+	case id != "":
+		return errors.New("no such T3 thread on your computers (list them with t3_sessions)")
+	}
+	devID := ""
+	if device != "" {
+		d, err := s.pickDevice(h, device)
+		if err != nil {
+			return err
+		}
+		devID = d.ID
+	}
+	found := s.st.aliasesNamed(devID, name)
+	if len(found) == 0 {
+		return fmt.Errorf("no session is named %q%s", oneLine(name, maxNameRunes), s.knownNames(devID))
+	}
+	return fmt.Errorf("the session named %q isn't there any more (list sessions with t3_sessions)", oneLine(name, maxNameRunes))
+}
+
+// nameOnSeveralComputers is the refusal for a name used on several computers when no computer was named.
+func (s *sisters) nameOnSeveralComputers(device, name string) error {
+	name = strings.TrimSpace(name)
+	if device != "" || name == "" {
+		return nil
+	}
+	found := s.st.aliasesNamed("", name)
+	devs := map[string]bool{}
+	var where []string
+	for _, a := range found {
+		if !devs[a.Device] {
+			devs[a.Device] = true
+			where = append(where, firstNonEmpty(a.DeviceName, a.Device))
+		}
+	}
+	if len(devs) > 1 {
+		return fmt.Errorf("%q names sessions on several computers (%s): pass device", oneLine(name, maxNameRunes), strings.Join(where, ", "))
+	}
+	return nil
+}
+
+func (s *sisters) knownNames(device string) string {
+	var names []string
+	for _, a := range s.st.aliases() {
+		if device == "" || a.Device == device {
+			names = append(names, fmt.Sprintf("%q", oneLine(a.Name, maxNameRunes)))
+		}
+	}
+	slices.Sort(names)
+	if len(names) == 0 {
+		return " (no session has a name yet; use t3_rename or the Rubi panel)"
+	}
+	if len(names) > 10 {
+		names = append(names[:10], "…")
+	}
+	return " (named sessions: " + strings.Join(names, ", ") + ")"
 }

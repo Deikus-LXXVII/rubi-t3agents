@@ -1,851 +1,132 @@
-# Claude Code approvals for Rubi
+# T3 Agents for Rubi
 
-A [Rubi](https://github.com/Deikus-LXXVII/rubi) plugin: when Claude Code on your Mac asks to run a shell
-command, you approve or deny it in the Rubi panel (with your passkey), from wherever you are.
+A [Rubi](https://github.com/Deikus-LXXVII/rubi) plugin. Your Bots start and steer agent threads that run in
+T3 Code on your computer, each in a role VM, and you stay in charge: every
+step that widens what an agent can do is an approval in the Rubi panel, with your passkey.
 
-How it works: a `PermissionRequest` hook in Claude Code's managed settings runs `rubi-home claude-hook`.
-That hands the request to [Rubi Home](https://github.com/Deikus-LXXVII/rubi/blob/main/docs/design/rubi-home.md)
-on the same Mac and waits. This plugin, running in your Rubi, collects the request from Rubi Home, asks you
-to approve it, and answers. Rubi Home's local socket can only ask; an answer comes only from your Rubi over
-the paired, encrypted channel, bound to that request's id, session and exact command.
+How it works: Rubi Home on your computer runs T3 Code and the role VMs and offers them to this plugin as two
+capabilities. The plugin keeps what is Rubi's to decide (approvals, role changes, trusts, bindings, the pages);
+Rubi Home does the work on the computer.
 
-Everything that isn't your approval is a **deny**, with a reason Claude sees:
+- **`t3-agent`**: projects, threads (start, send, messages, status, close, interrupt, fork, mode, rename), the
+  queue of questions the agents ask, roles, SSH targets and the usage limits.
+- **`t3-setup`**: the setup page's steps (container tool, runner image, T3 installed and pinned, T3 paired,
+  each role's provider sign-in, a self-test).
 
-| What happened | Claude Code is told |
-|---|---|
-| You approved | allow |
-| You denied | "Rubi: you denied this command in Rubi." |
-| No answer within 280 seconds | "Rubi: no answer in time, so the command was denied." |
-| Rubi is locked, offline or not paired | "Rubi: Rubi isn't connected to this computer …" or "Rubi: Rubi stopped answering …" |
-| Rubi Home isn't running, or the hook fails or times out | deny (the hook prints one; `onFailure: block` covers the rest) |
+The plugin has no network access, no files and no secrets of its own.
 
-Only Bash commands go through Rubi. Edits and other tools keep Claude Code's own prompt. Commands Claude
-Code runs without asking (its read-only set, or allow rules in managed settings) never reach the hook.
+## Concepts
+
+- **Roles.** A role is a named profile on one project (its own skills, subagents, built-in tools, MCP servers,
+  Claude plugins, default permission mode and SSH grants) that runs in its own VM. Every change is a new
+  immutable version you can revert. A Bot may make small changes itself (tier 1, audited); anything that widens a
+  role (MCP servers, plugins, network hosts, a tool outside the safe set, a looser mode, an SSH target that allows
+  any command) is a strong approval (tier 2) that names the exact difference.
+- **Modes.** `plan`, `default`, `acceptEdits`, `bypassPermissions`, strictest first. A stricter mode applies at
+  once; a looser one is a strong approval, and no mode goes beyond what the role (and the bridge) allows.
+- **Real paths.** The role VMs mount a project at its real path on the computer. Mandates, project trusts and the
+  checks on a question's directory and file paths are keyed on that path as `t3-agent.projects` reports it (spaces
+  are fine), and a question is matched by its `cwd` being under it. A project Home doesn't list, or lists with a path
+  that is not a clean absolute one, makes every question ask.
+- **Mandates.** "Allow and trust this thread for 2 hours" on a command approval lets Rubi allow that thread's
+  plain, listed commands by itself (at most 300, each audited). Every option of a listed program is checked
+  against a list; push, `--force`, `sudo`, network commands, installs, credential paths and writes outside the
+  project always ask.
+- **Project trust.** A Bot bound to a thread can ask (one strong approval) to trust its whole project until the
+  next 04:00 (at most 24 hours), or until you revoke it (no end time, said in capitals in the approval). While it
+  lasts, plain listed commands of every thread of that project are allowed and the Bot may start and bind threads
+  in it without a new approval, never one that skips permission prompts. Commits go to the branch a thread is on;
+  new branches only match `agent/*`. Revoke in the panel or with `t3_mandates`.
+- **Skill library.** Shared skills admitted by the library's curator can be attached to roles, following the
+  latest admitted version or pinned to one. Withdrawn versions are dropped at the next check.
+- **SSH.** Rubi Home holds the SSH targets, the keys and the pinned host keys; the VMs never see them. You
+  register a target with a strong approval that carries the host key fingerprint you confirmed; Bots can grant a
+  registered target to a role. A command on a target registered "ask each time" is an approval of its own.
+- **Briefs and reports.** `t3_start` and `t3_role_start` take an optional typed `brief`: `goal` (required), `scope`,
+  `acceptance[]`, `verify[]`, `timebox`, `forbidden[]` and `report` (what the report should cover). Rubi checks the
+  lengths (goal and scope 600 characters, an item 300, at most 8 items a list) and refuses control and invisible
+  characters, then renders it the same way every time under a `## BRIEF br_xxxxxxxx` heading after the task, with
+  fixed standing orders (stay in scope, never push to a protected branch, end with the report below). The whole first
+  message is shown in the approval. The thread is bound with that `brief_id`; passing it to `t3_send` appends the
+  standing orders to the message, so a resumed thread gets them again. The agent is asked to end with
+  `STATUS: PASS|ISSUES|BLOCKED`, `COMMIT: <sha or none>` and one or more `EVIDENCE: ...` lines. When a thread's
+  final text (`t3_reply`) ends in a well-formed report, the event also carries `status`, `commit` and `evidence`
+  (untrusted text); a malformed or cut report leaves the raw `text` only.
+- **Approvals.** Tool questions of a thread (commands, edits, a git credential, a host outside the allow-list, an
+  SSH command) reach you as approvals; Rubi Home answers the thread only after your approval. A tap approves a
+  read-only command (`ls`, `cat`, `git status`); everything else is a strong approval you can't lower.
+  Anything that isn't an approval (deny, cancel, expiry, Rubi locked) is a deny with a reason the agent sees.
 
 ## Permissions
 
-- **Rubi Home: `claude`.** The plugin can answer Claude Code's permission requests on your paired
-  computers.
-- **Rubi Home: `claude-sessions`.** The plugin can list the Claude Code sessions on your paired computers
-  and pass messages to and from them; this part can't approve anything. The install screen shows both.
-- **Rubi Home: `claude-agent`.** The plugin can answer the permission questions of Claude run in a project VM
-  on your computer and pass messages to and from its sessions (see [the agent path](#claude-in-a-project-vm-the-agent-path-v04)).
-- **No network access**, no files, no secrets.
-- **Actions.** `claude-code.run` (any command; passkey or password, and you can't lower it) and
-  `claude-code.run_safe` (a few read-only commands such as `ls`, `cat`, `git status` with plain
-  arguments; a passkey **tap** by default, no Face ID, and you may change it). Anything the classifier
-  isn't sure about is `run`. On a security key the tap is just a touch; iPhone and Mac passkeys may still
-  ask for Face ID or Touch ID, which Rubi accepts too. A tap never approves a `run` command.
-- `claude-code.bind` (passkey or password, can't be lowered): lets one Bot talk to one Claude Code
-  session; see [Bots and sessions](#bots-and-sessions).
-- `claude-code.rename` (a passkey **tap**, can't be lowered): lets a Bot name a session other than its own;
-  see [Naming sessions](#naming-sessions).
-- Its approvals count toward Rubi's limit of 30 approved actions per hour, shared with your other actions.
-
-The approval link reaches you through your Bot: subscribe it to the plugin's `approval_needed` event (Rubi
-asks you to approve that once). The event carries the command and Claude's own description, marked as
-untrusted.
-
-## Trust a session for 2 hours
-
-A `run` approval has a second button, **Allow and trust this session for 2 hours**. For two hours (or 300
-commands) Rubi then allows that session's commands in that directory (and below it) by itself, each one
-written to Rubi's audit log, as long as every part of the command line (`&&`, `||`, `;`, `|`, `&`,
-newlines) is a plain command on the plugin's list. Every option of a listed program is checked against
-that program's list of known options (what each takes: a flag, a value, a file it reads, a file it writes,
-a program to run); an option that isn't on the list asks. These always ask, whatever the trust:
-
-- `git push` in any spelling, `--force`, `reset --hard` and other git commands that throw work away or
-  change config or remotes (`git restore` only unstages; `git checkout` of a branch or `-b` is allowed, and because a single name can't be told from a branch, checking out a path can still overwrite working files);
-- `sudo`, shells and wrappers (`sh -c`, `eval`, `env`, `xargs`), substitutions, variables, backticks,
-  escapes, subshells, here documents;
-- the network (`curl`, `ssh`, `gh`, installs, `go run x@latest`, publishing or deploy targets);
-- options that name another program or code to run (`git grep -O`, `go test -exec`, `make --eval`,
-  `cargo --config`, `npm --script-shell`);
-- writing or deleting outside the directory (redirections, output options such as `sort -o`,
-  `go build -o`, `cp -t`, report and cache paths of build tools, `git worktree add`) or into `.git`
-  (a hook written there runs at the next commit);
-- paths that hold credentials or run at login (`.ssh`, `.env`, keys, tokens, `.zshrc` and other shell
-  startup files, `.config`, browser cookies);
-- environment variables set in front of a command, except a short list of harmless ones (`CI`, `TZ`,
-  `GOOS`, `CGO_ENABLED` ...), and `cd` that is not joined to the next command by `&&`;
-- `go generate`, `go mod download`, `npm outdated` and other commands whose purpose is to fetch or run something;
-- programs by path (`./script.sh`), interpreters and anything not on the list.
-
-The check reads the command line only. A build, test or script it starts (`make`, `go test`, `npm run`,
-`pytest`) runs the project's own code and can do anything you can, including network access and writing
-outside the directory, and Claude may have just written that code. So a trust is only as safe as trusting
-Claude with your rights in that project, and the approval says so. Builds and `go mod tidy` may also fetch the
-project's declared dependencies. Reading files is allowed anywhere on disk except credential paths (`cat /etc/hosts`
-works); only writes are held to the directory. The `jq` filter check for `env` is a hint, not a barrier. The check does not look at your disk: a symlink already in the project that points
-outside is followed by the commands that use it, and `cd NAME` can land elsewhere if your own zsh
-configuration sets `cdablevars` or `CDPATH`. Use the plugin's page in the Rubi panel to see and
-revoke trusts; your Bot can list and revoke them too
-(`claude_code_mandates`), but never add one.
-
-### Trust a project until 04:00
-
-(There is also a version [without an end time](#trust-a-project-until-i-revoke-it).)
-
-A `run` approval can have a third button, **Allow and trust this project until Sat 31 Oct 2026 04:00 CET**
-(the label names the exact time and date). One approval then trusts the whole project instead of one session:
-until the next 04:00 (at most 24 hours; the approval states the time zone) Rubi allows plain, listed commands
-in **every** Claude Code session on that computer whose directory is inside the project's root: the session
-that asked, its sub-sessions and worktrees, other sessions, and sessions started later (also by a Bot). The
-root is the project's top directory as Rubi Home reports it (`project_root` in `claude_code_sessions`; for a
-folder that is not a git repository it is the folder itself). The button is offered only when Rubi Home
-reports a root, and never for a home directory or anything higher up (fewer than three path parts), a disk, a
-folder of documents, a credential path, or a folder with no git remote (`local:` key; the plugin cannot tell it
-from a plain folder) with fewer than four path parts. Where Rubi Home reports it (`real_cwd`), the session's
-real directory with symlinks resolved must also be inside the root; symlinks inside the tree are still followed
-by the commands that use them. Branch patterns that match `main`, `master`, `trunk`, `develop` and the like (or
-are `*`) are refused. At most 2000 commands; each allow is audited with the trust's id (`pt_…`).
-
-It uses the same command check as the 2-hour trust (everything above still asks), plus a **branch rule**:
-a command that switches to or creates a git branch (`git switch X`, `switch -c X`, `checkout X`,
-`checkout -b/-B X`, `branch X`, `branch -m/-c/-d`, `worktree add -b X`, `stash branch X`, `rebase UPSTREAM X`)
-is allowed only when `X` matches the trust's branch pattern (`path.Match` syntax, default `agent/*`);
-otherwise it asks. Pushes and every remote git command, `--force`, `git tag` (so releases), sudo, the network
-and installs, writes outside the root or into `.git` and credential paths ask as before. Commits, merges and rebases go
-to whatever branch the session is on, which may be `main`: the rule is about switching and creating, not about
-where the session started. A detached switch (`git switch --detach X`) names a commit and asks unless it matches.
-`git rebase` asks unless it says `--no-update-refs` (`--update-refs`, or a `rebase.updateRefs` setting Rubi
-cannot see, moves other local branches); that holds for the 2-hour trust too. While a project trust covers a
-directory, a session's 2-hour trust is held to the same branch rule.
-
-**What it gives the Bot.** A Bot bound (with its own approval) to a session inside the project may, until the
-trust ends, `claude_code_start` a session in a directory inside the root and `claude_code_bind` to another
-session inside it without a new approval (the new session is bound as usual; the input checks, the rate limits
-of 5 starts an hour and Rubi Home's own checks of the folder still apply). Each is audited with the trust's
-id. **That means the Bot can open sessions in that project with a task of its own until the trust ends, up to 20 binds and 5 starts an hour.** The bound session must be live and inside the root, and a session Rubi Home starts outside it (a symlink) unbinds the Bot. If
-those sessions run with `bypassPermissions` (a desktop app setting), Claude runs any command there without
-asking and no trust or approval matters; a trust only covers sessions that ask.
-`claude_code_send` and the wake-up never needed an approval.
-
-**Asking for it.** A Bot can ask for the trust with `claude_code_trust_project {bind_code, branch_pattern?}`
-for the project of the session it is bound to: a strong, locked approval (a tap isn't enough) that shows the
-same text. The trust is never granted by the tool itself. Only one trust is live for a computer and project
-root: a new one replaces the old (both audited). A 2-hour trust and a project trust can both exist; either may
-allow a command, and revoking one leaves the other.
-
-**Time zone.** Rubi Home doesn't report its computer's time zone, so 04:00 is in the zone of the machine Rubi
-runs on, and the approval says which. The end is computed once, when the approval is asked, and is what is
-granted; an approval answered after it grants nothing. 04:00 is found with calendar arithmetic in the zone, so
-the trust is also capped at 24 hours from the grant, so on a day of 25 hours it can end up to an hour before 04:00 on the clock.
-
-**Revoke and persistence.** The plugin's page in the panel has a "Trusted projects" section (root, computer,
-branches, commands used, when it was granted, end or "UNTIL REVOKED") with Revoke and Revoke all; `claude_code_mandates` lists both kinds and revokes
-`pt_…`, `md_…` or `all`. The trust is part of the plugin's saved state in Rubi (like 2-hour trusts and
-bindings): it survives a restart of Rubi Home, of the plugin and of Rubi until it ends or is revoked; ended
-ones are dropped. Nothing in it works around Rubi being locked: the allow is an answer sent through Rubi, so
-while Rubi is locked the helper denies as always.
-
-### Trust a project until I revoke it
-
-A fourth button on `run` approvals, **Allow and trust the project /path/to/project until I revoke it**, gives the
-same project trust **without an end time**. The 04:00 button stays the default and the first choice; nothing
-chooses the unlimited one for you. The Bot can ask for it too: `claude_code_trust_project {bind_code,
-branch_pattern?, until?}` with `until` `"0400"` (the default) or `"revoked"`; the approval is strong and locked
-as before, carries only the one option for the mode asked, and says **UNTIL REVOKED — no end time** in capitals.
-
-- **How long.** Until you revoke it in the panel or with `claude_code_mandates`, or Rubi is locked. It stays
-  on across restarts of Rubi Home, of the plugin and of Rubi, and across days, weeks and months. While Rubi is
-  locked nothing is allowed (the allow is an answer sent through Rubi, and the helper denies when Rubi isn't
-  polling), and the trust is there again when you unlock. It is never dropped by the plugin's clean-up; the
-  list of 20 trusts evicts the oldest *timed* one when full and refuses a new grant when all 20 are unlimited.
-- **No count limit.** A 04:00 trust ends after 2000 commands. An unlimited one has no cap, because a cap would
-  end it by surprise; every allow is still counted and audited with the trust's `pt_…` id, so the audit log is the
-  control. The panel and `claude_code_mandates` show the count and **when it was granted** (`granted_ago`, for
-  example "3 d 4 h ago").
-- **Everything else is the same.** The same command check, the branch rule, the same always-ask list (push and
-  every remote git command, `--force`, sudo, network commands and installs, `git tag`, writes outside the root or
-  into `.git`, credential paths, branches outside the pattern, `git rebase` without `--no-update-refs`), the
-  same root rules, and the same rate limits for the Bot (20 binds, 5 starts, 5 trust requests an hour).
-- **Replacement.** There is one live `pt_…` per computer and root; a new grant, of either mode, replaces the old
-  one (both audited with their modes). Choosing "until 04:00" later replaces an unlimited trust with a timed one.
-- **The risk, plainly.** Nothing ends it by itself, so it can outlive what you remember about it. While it
-  stands, every Claude Code session in the project may run plain, listed commands without asking (builds and
-  tests run the project's own code with your rights, which Claude may have just written), the Bot bound to a
-  session of the project may open and bind sessions in it without asking, and those sessions run with the
-  Claude desktop app's permission settings: if those skip permission prompts (`bypassPermissions`), their
-  commands never ask and no trust matters. Look at the plugin's page now and then and revoke what you no longer
-  need.
-
-### Sessions with bypassPermissions
-
-The example managed settings leave `bypassPermissions` allowed (a mode the Claude desktop app can set per
-session). Such a session never asks before a command, so the `PermissionRequest` hook never runs there:
-**neither Rubi approvals nor trusts (2-hour or project) apply to it**, and Claude runs every command without you.
-Its session hooks still run (`SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`), so it shows up in
-`claude_code_sessions` (with a note), and Bots' messages, replies and asks work as in any other session.
-
-Optional hardening: to make every session go through Rubi, turn the mode off in the managed settings,
-inside `"permissions"`:
-
-```json
-"disableBypassPermissionsMode": "disable"
-```
-
-Then a session can't start in, or switch to, `bypassPermissions`.
-
-## Bots and sessions
-
-Each Bot (a "sister") can bind to one Claude Code session, usually the main session of its project, and
-then message it. Nothing here is specific to one setup: projects are git remotes, and sessions come from
-the Claude desktop app's session list and Claude Code's transcripts on that computer (Rubi Home reads
-them, it doesn't run Claude).
-
-1. The Bot calls `claude_code_sessions` and picks its session (project, main or sub-session, state).
-2. `claude_code_bind` (the Bot passes its name as `rubi_agent` and the `agent_code` of its latest Rubi
-   webhook as `rubi_agent_code`; Rubi checks them and tells the plugin the Bot's registered name, so a
-   Bot can't bind as another) asks you once, with your passkey. A session talks to one Bot; binding again
-   replaces the Bot's binding. Desktop sessions are followed by the app's id, so a binding survives the
-   app restarting the session.
-3. `claude_code_send` (at most 4000 characters, 30 an hour) queues a message. The session's hooks hand it
-   to Claude at its next prompt, or when it stops (at most 5 batches in a row, so it can't be kept busy
-   forever). Claude's answer in that turn comes back to the Bot as a `claude_reply` event.
-4. Claude asks the Bot with a ` ```rubi-ask kind=research``` ` block in an answer; it arrives as a
-   `claude_ask` event, also from the project's sub-sessions. The Bot answers with `claude_code_send` and
-   `reply_to_ask`.
-
-5. `claude_code_status` shows how the bound session stands (busy or idle, messages waiting, when a
-   message to it would be read). Each message also reports where it stands as a `claude_message` event
-   `{id, session_id, state, at}`, sent to the Bot that sent it: `delivered` (Claude has it), `answered`
-   (the answer went back as `claude_reply`), or `expired` (24 hours unread). `queued` is the `claude_code_send` result itself (`message_id`), so it isn't repeated as an
-   event. Every event may wake the Bot's agent, so there are only these few.
-
-### Naming sessions
-
-Give a session a name that you and your Bots can use instead of its id.
-
-- **It is an alias kept in Rubi, not Claude Code's own session name.** Claude Code documents `/rename`,
-  `--name`/`-n` and the session picker (and the desktop app lets you click a title), but all of them work from
-  inside Claude Code; there is no documented way for another process to rename a session, and the files where
-  the name lives (`~/.claude/sessions/<pid>.json`, the desktop app's session store) are not documented, so the
-  plugin does not touch them. A name set here does not show in Claude Code or in the desktop app (use `/rename`
-  there as well if you want that). The alias is saved in the plugin's encrypted state, per computer and
-  session, and follows the session when the desktop app restarts it under a new id.
-- **Rules.** 1 to 64 characters, trimmed; only letters, numbers, punctuation, symbols and the ordinary space
-  (no control, zero-width, bidirectional or other invisible characters, no combining marks or variation
-  selectors, no look-alike blanks such as Hangul fillers or the braille blank, no special spaces, no two spaces in
-  a row; write accents precomposed, as "é", because the plugin has no Unicode normalization); not like an id (no `local_` prefix, UUID,
-  8 or more hexadecimal characters only, a Rubi id such as `pt_...`, or the id of a session on that computer);
-  unique on a computer, ignoring case (compared after upper- then lower-casing). A name is refused, never repaired, so what you approved is what is
-  stored. Letters of other scripts that look alike are not detected: the approval also shows the session's
-  title, directory and id.
-- **Where it shows.** `claude_code_sessions` lists `name` next to `title`; `claude_code_status` and the bind
-  result include it. `claude_code_bind` takes `name` instead of `session_id`; an unknown name, a name used on
-  two computers (pass `device`) or a name whose session has gone is a clear error. `claude_code_send`,
-  `claude_code_status` and `claude_code_start` take no session (they act on the bound session or start a new
-  one), so there is nothing to resolve in them.
-- **`claude_code_rename {session_id | session_name, device?, name | clear}`.** Without a session it names the
-  session the Bot is bound to, which needs **no approval** (audited as `session_renamed`; the result shows
-  `previous_name`). A name the user set in the panel (or a Bot set with the user's tap) is the user's: replacing
-  or clearing it needs a tap even on the Bot's own session or under a trust. Any other session
-  needs a passkey **tap** from you, unless a live project trust (`pt_...`, see
-  [Trust a project until 04:00](#trust-a-project-until-0400)) covers the session's directory and the Bot is
-  bound to a session inside the same root: then it needs none (audited like the trust's other shortcuts). Tap,
-  not Strong, because a name is a reversible label inside Rubi that changes nothing in Claude Code; Strong stays
-  for what gives a Bot reach (bind, start, trust). At most 20 renames an hour per Bot, 500 names in all.
-- **In the panel.** The plugin's page has a "Session names" list (it reuses the last session list for 5
-  minutes, so its 30-second reload doesn't re-read every session; a rename shows at once): **Name** / **Rename**
-  asks for the name in a box the panel draws, titled "Claude Code asks:",
-  **Clear name** removes it, and a name whose session is gone has **Remove name**. You may rename any session
-  there directly; the same rules apply. It needs a Rubi whose panel can ask for text (the action's
-  `prompt`); an older panel gets an error instead of clearing a name by accident.
-- **Expiry.** A name is dropped when its session has not been seen for 30 days and a *whole* list of its
-  computer's sessions (archived ones included) lacks it, or when its computer has not been paired for 30 days.
-  Rubi Home's list is not always whole: it is cut at 200 sessions, a scan may reach its caps (2000 desktop
-  files, 200 transcripts from the last 30 days) or not finish, and an old scan is served while a new one runs.
-  Home says so with `truncated: true` (and `total` when it cut the list); the plugin never drops a name on such a
-  list (an older Rubi Home that doesn't say it is treated as whole, so update it), and binding by a name whose
-  session is missing from one uses the saved ids and the directory, project and title from when the session was
-  last seen, with a note in the approval. The sweep reads the archived sessions too, which is heavier, so it runs
-  only when names exist and at most every 10 minutes (on `claude_code_sessions` without a `repo`, a rename or a
-  bind by name).
-
-### Starting a session when none exists
-
-If your project has no Claude Code session open, the Bot can ask for one with `claude_code_start`
-(`rubi_agent`, `rubi_agent_code`, `device`, `cwd`, `task`). It is a strong approval with your passkey, and
-the approval says what it does: it starts a NEW Claude Code session on that computer in that directory. The
-approval shows the Bot's `task` word for word (at most 2000 characters and 40 lines) and, below it, the
-header Rubi adds before it, so you see the whole first message. The session receives it framed as a message
-from the sister, not as your own words. The task is rejected, not cleaned, if it contains invisible
-characters (zero-width, bidirectional, tag, private-use, control, C1) or more than two blank lines in a row;
-Rubi Home checks the same, so what you approved is what is launched.
-
-- **Capability.** The plugin declares the separate Rubi Home capability `claude-start`, which the install
-  screen words as starting a new session with a first message (and, where permission prompts are skipped,
-  Claude running any command). Plugins without it can't start sessions.
-- **Permissions.** The session runs with the Claude desktop app's permission settings. If those skip permission
-  prompts (`bypassPermissions`, which desktop sessions may use), Claude can run any command there without
-  asking, and Rubi approvals and 2-hour trusts don't apply to it. Approve only if you trust the Bot's task
-  with that. The result repeats this when the session reports `bypassPermissions`.
-- **Where.** Rubi Home starts sessions only in a directory where Claude Code already has a session (a project
-  you have used) or inside a folder you list as `claude_start_dirs` in Rubi Home's `config.json`
-  (absolute paths, none by default). The path must be the real one: a path that goes through a symbolic link
-  is refused, so the directory you approve is the directory the session runs in. Never `~/.claude`, `~/.ssh`,
-  `~/Library`, `~/.local`, `~/.npm`, `~/.oh-my-zsh`, `~/.zsh*`, your home folder itself, `/var`, `/opt`,
-  `/Applications`, `/Volumes` itself, system folders. At most 3 starts an hour per computer, and in this plugin
-  5 requests an hour per Bot and 10 in all.
-- **How.** Rubi Home opens the desktop app's `claude://code/new?folder=...&q=...` link with `/usr/bin/open`
-  (a Mac with the Claude desktop app is needed) and waits up to 45 seconds for the new session's SessionStart
-  hook (a fresh `startup`, not a resume, in that folder; the first message carries a random reference code that
-  is checked when the transcript shows it). The hooks must be set up as for any other session. A headless
-  `claude -p` is not used: it needs the command-line tool signed in and leaves no live session behind.
-- **After it starts.** The Bot is bound to the new session in the same step, as with `claude_code_bind`: it
-  gets `claude_bound` with its `bind_code` (the code is never in the approval's result) and can use
-  `claude_code_send`. If the session doesn't show up in time (the app may wait for you to confirm, or the
-  hooks are missing), the result says it was launched but not seen yet; once `claude_code_sessions` lists it,
-  the Bot binds with `claude_code_bind` (a new approval). If Rubi Home doesn't answer after the request was
-  sent, the error says the session may have been started: check the desktop app before trying again.
-- **Needs a newer Rubi.** `claude-start` is a new capability; the plugin's `MinRubi` is v0.14.0-rc.2, the core
-  release that has it (and the agent path's capabilities).
-
-Manual check on the Mac (not done yet): put a scratch folder in `claude_start_dirs`, have a Bot call
-`claude_code_start` with a harmless task, approve, and see that the app opens a session in that folder with
-the framed message, that the Bot gets `claude_bound`, that the session keeps running, and which permission
-mode it has. Also try a task with spaces, quotes, `&`, `#` and non-ASCII text.
-
-### Waking an idle session
-
-Hooks fire only when Claude Code runs a turn, so a session waiting for you would read a message only
-when you next prompt it. The optional waiter hook fixes that: a second `Stop` hook,
-`rubi-home claude-hook --wait` with `asyncRewake: true` and `timeout: 3600`, runs in the background while
-the session is idle and stays connected to Rubi Home. When a message arrives it writes it to stderr and
-exits 2, which makes Claude Code wake the session with the message as a system reminder; Claude answers
-and the answer goes back to the Bot as usual. Typing a prompt, ending the session, a newer waiter for the
-same session or the hook's time limit (it gives up 30 seconds before the timeout) end the waiter without
-delivering anything, so nothing is delivered twice. It never blocks Claude Code: it runs in the
-background, prints nothing on stdout and every failure is exit 0. Rubi Home saves queued messages to
-`claude-queue.json` in its folder, so a restart keeps them (24 hours at most).
-
-The hook is in [`examples/managed-settings.json`](examples/managed-settings.json). The managed settings
-file is owned by root, so adding it needs an admin (`sudo`), and without it (or with an older Rubi Home)
-everything still works, only an idle session waits for your next prompt. `claude_code_send` says whether a
-waiter is attached (`waiter`) and what to expect (`delivery`).
-
-A Bot can't approve commands, and messages never grant permissions. You can unbind in the plugin's page.
-Messages are injected only through hooks; Rubi never resumes a session that is open in the app.
-
-A local script (not a Bot) can use the same waiter through Rubi Home's `rubi-home claude-send`, which queues
-a message for a session and prints its answer (see Rubi's `docs/design/rubi-home.md`). Its messages are framed
-as coming from a local process, not a Bot, and the answers to them stay in Rubi Home: this plugin ignores
-anything addressed to a local sender (`local:<name>`), so no Bot ever receives them.
-
-### The sister tools inside Claude Code
-
-Claude Code gets four real tools from the `rubi-sisters` plugin (marketplace `rubi`, embedded in the
-`rubi-home` binary, with a skill that tells Claude how to use them). Claude calls them as
-`mcp__plugin_rubi-sisters_rubi__<tool>`:
-
-| Tool | What it does |
-| :- | :- |
-| `rubi_sisters {}` | the Bot(s) bound to this session (name, since) and who sent it messages in the last 24 hours |
-| `rubi_ask {text, kind?}` | queues an ask for the sister, exactly like a ```` ```rubi-ask ```` block (kind `research`, `audit` or `lookup`, at most 2000 characters, at most 3 a minute); returns the ask's id. It arrives at the Bot as `claude_ask` |
-| `rubi_reply {message_id, text}` | answers one message that was delivered to this session in the last 24 hours, now. It arrives at the Bot as `claude_reply` with `in_reply_to` set, and the message's state becomes `answered`. It is Claude's whole answer to that message: the turn's final answer is not sent again for it (messages not replied to still get the final answer) |
-| `rubi_inbox_status {}` | messages waiting, replies still owed, whether a waiter is attached, recent states (queued, delivered, answered) |
-
-The text-block convention keeps working (the skill names it as the fallback), and the plugin needs no change
-to route these: asks and replies reach the Bot through the same `claude-sessions.next` entries. When you bind
-a Bot, unbind it or the binding follows a restarted session, the plugin tells Rubi Home with
-`claude-sessions.bound`, which is how `rubi_sisters` names her. An older Rubi Home doesn't know that
-operation: the plugin logs it once and carries on, and the tools there say so.
-
-**They add no trust.** Nothing a tool returns approves a command or changes a permission, Claude can't
-approve anything with them, and a tool call is a separate line on Rubi Home's socket that is never treated as
-an approval or a hook event. A call acts for the session it comes from; an ask from a session that isn't
-bound may still go to the Bot of its project (the same route as a text block). Consent: the managed
-settings allow only the two read-only tools (`rubi_sisters`, `rubi_inbox_status`) without a prompt;
-`rubi_ask` and `rubi_reply` send something out, so Claude Code asks you for each call as it does for any MCP
-tool. The allow rule is name-based (plugin `rubi-sisters`, server `rubi`): another marketplace's plugin of the
-same name would match it too, so lock marketplaces with the managed `strictKnownMarketplaces` setting
-([docs](https://code.claude.com/docs/en/settings-reference.md#strictknownmarketplaces)) if that matters to you.
-
-How the tools know which session calls: not from anything in the request (a process of yours could write any
-session id into it), but from the kernel. Rubi Home reads the pid of the process on the other end of its socket
-(macOS `LOCAL_PEERPID`, Linux `SO_PEERCRED`) right after accepting the connection, and finds that process's
-`claude` ancestor (the first process named `claude` within 6 levels above it, else its direct parent; never a
-shell, terminal or the desktop app above it). The first hook line of a session claims that `claude` process
-for the session; while that session keeps sending hooks another session's line from the same process is ignored.
-A claim ends with the session's SessionEnd (only when it comes from the claiming process), when the pid is
-reused, after 24 hours without a hook, or moves when the session has been silent for 10 minutes and another
-session's hook arrives from the same process. A tool call is attributed to the session that holds its caller's
-`claude` process, or refused ("this session isn't known to Rubi Home yet; try again after its next prompt"),
-also before a new `claude` has sent its first hook, even when an earlier one that crashed ran under the same
-shell. The CLI process must be named `claude`; otherwise the tools are refused (fail closed). Where the peer
-can't be identified the tools are refused too.
-
-What that does and doesn't guarantee: tool identity is the `claude` process tree as the kernel reports it, plus
-the hook lines, which are trusted as before. Any process inside session A's tree acts as A: it can use A's tools,
-end A's claim and claim the process for another session id (that is what `/clear` does). A process of yours
-outside every `claude` tree is refused unless it first claims a process of its own by sending hook lines (you
-could always forge those); it can then act as a session id no `claude` has claimed yet, but cannot take a
-process an active session holds. The tools give no approval power in any case.
-
-Install (needs the managed settings and the root-owned hook binary below):
-
-```sh
-~/.rubi-home/bin/rubi-home install-hook --with-claude-plugin
-```
-
-It copies the plugin's files to `/Library/Application Support/Rubi Home/claude-plugin` in the same
-administrator step as the binary. The file contents travel inside the script (root reads nothing you can
-write), root decodes them into a temporary folder next to the target, checks every file's sha256, makes the
-tree root-owned and renames it into place (the old folder is kept until the rename worked). `--dry-run`
-lists the files with their hashes. Then the managed settings register the marketplace (`extraKnownMarketplaces`,
-a `directory` source) and enable the plugin (`enabledPlugins`); they do not use `managed-mcp.json`, which
-would take exclusive control of your MCP servers. Restart Claude Code afterwards. The MCP server runs
-`/usr/local/bin/rubi-home claude-mcp`, so that root-owned copy must be new enough: with an older one the
-server fails to start (`/mcp` shows it as failed) until you run `install-hook` again. The plugin folder is
-root-owned; the Claude Code docs say a marketplace added from a local directory with a relative `source` is
-read in place, but they don't say so for managed `extraKnownMarketplaces`, so if Claude Code copies the plugin
-into `~/.claude/plugins` that copy is writable by you and only the source is protected. That is why
-`strictKnownMarketplaces` and the root-owned command path matter more than the folder itself.
-
-Manual check: start a Claude Code session in a project, ask "which sister do you have? use rubi_sisters"
-(it lists the tools and names her once she is bound), then have the Bot send a message and ask Claude to
-`rubi_reply` to it (approve the prompt); the Bot should receive `claude_reply` with `in_reply_to`. `/mcp` shows the `rubi`
-server of the `rubi-sisters` plugin as connected.
-
-## Claude in a project VM (the agent path, v0.4)
-
-Besides approving the commands of Claude Code sessions through its hook, the plugin can work with Claude run
-through the Agent SDK in a project VM on your computer (Rubi Home's `claude-agent` capability; the design is
-`docs/design/agent-runner.md` in the Rubi repository). The two paths live side by side: the old one is used
-for a computer whose Rubi Home doesn't report the capability, and for bindings made on it.
-
-**Capability detection.** For each paired computer the plugin calls `claude-agent.status`. An answer means the
-computer has the capability (remembered for 5 minutes; "no" for 1 minute, so an updated Rubi Home is noticed).
-Such a computer is polled with `claude-agent.next`; the hook's `claude.next` poll goes on as before. The
-manifest declares the `claude-agent` and `agent-setup` Home capabilities; `min_rubi` is v0.14.0-rc.2, the first Rubi release that knows
-those capabilities (a core that doesn't know it refuses the manifest, so this plugin version must not be
-published before that release).
-
-**How a question is decided** (`claude-agent.next` item `perm.ask`, answered with `claude-agent.decide`; Rubi
-Home denies a question nobody answered in 280 seconds, or while Rubi is locked):
-
-1. `AskUserQuestion` is shown as an approval (a tap) whose buttons are the question's options; the chosen
-   option is Claude's answer. One single-choice question with 2 to 4 options at a time; anything else is sent
-   back to Claude to ask again.
-2. **Always asks, in every mode, bypassPermissions included, with a strong approval and no trust option:**
-   `git push` and every remote git command, `--force`, `sudo`, the network outside the allow-list
-   (`curl`/`wget`/`WebFetch` to anything but a plain lower-case URL on the Anthropic API, npm and PyPI hosts;
-   `ssh`, `nc`, `openssl` ... and a host the project VM's proxy asks about: item `net.ask`), any path outside
-   `/work` (also `~`, a `..` that leaves it, a `cd` that goes home or out), anything under `.rubi` (reading
-   too: it holds the Claude login), edits under `.claude`, `.git` (hooks, config), `.gitmodules` and
-   `.mcp.json`, `git tag`, `gh`, `npm publish` and similar releases, and a git credential request
-   (`cred.ask`, shown with its host, repository path and operation; without them it is denied as "unknown
-   remote"). **The check fails closed:** a Bash command is read with the strict splitter of the trust check, and
-   whatever that refuses (variables and expansions, `$(...)`, backticks, backslash escapes and line
-   continuations, here documents, subshells, comments) asks, so does a shell or wrapper (`sh`, `env`, `xargs`,
-   `eval`), an interpreter with code on the command line or stdin (`python -c`, `node -e`), a variable set in
-   front of a command, `ln`, `find -exec`, a git command that is not a plain local one (an alias, `config`,
-   `archive`, `bundle`, `-c`) and a wildcard that can match `.rubi`, `.claude` or `.git`. This over-asks (for
-   example a commit message in `$(cat <<EOF ...)`); under-asking is the error it avoids. It cannot see what a
-   program does inside (`make`, `npm run`, `python x.py`), which the VM's own borders cover.
-3. `bypassPermissions`: allow.
-4. A stricter mode (`plan`, `default`, `acceptEdits`): a live 2-hour or project trust that covers the session
-   or project allows what `mandateAllows` accepts (root `/work`; a trust of one project never covers another,
-   nor a hook session); a read-only command from the short list is a tap; the rest is a normal run approval
-   (allow, or allow and trust the session for 2 hours). Edits: `acceptEdits` allows (secret-looking paths
-   ask), `plan` denies, `default` asks unless a trust covers them. Read-only tools are allowed; Rubi's own
-   in-session tools (`mcp__rubi__*`) are allowed.
-
-**Modes.** `claude_code_mode {project, session, mode}` (and the panel op `mode`): to a stricter mode (order:
-plan, default, acceptEdits, bypassPermissions) at once, for a Bot bound in that project; to a looser one one
-strong approval (`claude-code.mode`). Rubi Home forwards only what the plugin asked for.
-
-**Sisters.** `claude_code_bind` takes a `project` and binds to an agent session (strong approval; no approval
-for a Bot already bound in a project the user trusts). `claude_code_send` goes through `claude-agent.send`
-(never steering) and reports the queue position; `claude_code_status` combines `claude-agent.status` and the
-session list; `claude_code_start` takes `project` and a `mode` (default `default`) and calls
-`claude-agent.start` (strong approval, the hidden-character checks, 5 an hour; under a project trust no
-approval, but a `bypassPermissions` start always asks; note that a `plan`, `default` or `acceptEdits` start does
-not, so under a project trust a Bot can start an `acceptEdits` session (which edits files in `/work` without
-asking) with no approval); `claude_code_trust_project` trusts the agent project
-(root `/work`); `claude_code_sessions` lists the agent sessions (`agent: true`, with `name`: the Rubi alias or
-else the runner's name). `claude_code_rename` calls `claude-agent.rename` and keeps the Rubi alias with the
-same rules and approvals as before; clearing removes the alias only (the runner has no way to clear a name).
-`claude_code_fork {project, session, name?}` calls `claude-agent.fork`: a tap for the Bot's own bound session,
-a strong approval for any other; no trust shortcut. The fork is asked of Rubi Home with the source session's
-`mode` explicitly (`claude-agent.fork {project, id, name?, mode}`; Home must apply it, and the plugin refuses to
-fork a session whose mode it doesn't know), so a fork never runs looser than its source.
-
-### Agent roles (R6)
-
-A role is a named profile on one project of the agent path (its own skills, subagents, built-in tools, MCP servers,
-Claude plugins, default permission mode and SSH grants) that runs in its own VM, isolated from the repository's own
-`.claude`. Rubi Home keeps the records and the versions (`claude-agent.role.list`, `.get`, `.history`, `.diff`,
-`.put`; every change is a new immutable version); this plugin keeps the tiers, the per-Bot limits, the approvals and
-the audit. It needs a Rubi Home that does `role.*`; an older one answers "doesn't do agent roles yet". The design is
-`docs/design/agent-roles.md` in the Rubi repository (sections 2, 6, 7).
-
-**Bot tools** (the Bot is always the one Rubi verified, `rubi_verified_agent`; a typed name or a Bot named in an
-argument is never used, and a call without a verified Bot fails). A project's default role (the repository's own
-`.claude`) can't be changed by a Bot.
-
-| Tool | What | Tier |
-|---|---|---|
-| `claude_code_role_create {project, name, description?, from_role?}` | new role; `from_role` (same project) copies instructions, tools, deny rules, subagents and mode, not skills, MCP, plugins, hosts or SSH | 1 with a live project trust held by this Bot for the project, else 2 (`claude-code.role_foreign`) |
-| `claude_code_role_update {role, name?, description?, instructions?, project_instructions?, default_mode?, revert_to?}` | text, rename, mode up to the ceiling; `revert_to` makes a new version with an older version's content (alone, without the other fields) | 1; a mode above the ceiling, or a revert over changes that weren't this Bot's own tier 1 changes, or a revert that widens: 2 (`role_widen`) |
-| `claude_code_role_archive` / `_unarchive {role}` | | 1 |
-| `claude_code_role_skills_set {role, skills:[{name, description?, content}]}`, `_skills_add {role, name, description?, content}`, `_skills_remove {role, name}` | ad-hoc, content-only skills; the text goes to Home as content-addressed blobs and is never put in the audit | 1 (a skill's text grants nothing: frontmatter is stripped and the body is context); a skill the scan flags is saved but **held** until the user accepts it |
-| `claude_code_role_skills_add {role, library: "id" \| "id@3"}` | a shared library skill (R9): `id` follows the latest admitted version, `id@3` pins version 3. The plugin reads it with the host method `library.get`, puts it in the role with `source: "library"`, the library id, the pin (none = follow), the resolved version, the hash and Rubi's signature, and Rubi Home verifies the signature against the key it pinned | 1 (admitted means trusted); refused when the skill or version isn't admitted, and a deprecated version takes no new attachments |
-| `claude_code_role_tools_set {role, tools?, deny?}` | built-in tools and deny rules (each leaving the other as it is when omitted) | 1 for the safe set (Read, Edit, Write, Glob, Grep, Bash, Agent, Skill, WebFetch, WebSearch), added deny rules and removing deny rules this Bot added; 2 for any other tool or removing a deny rule the user (or another Bot) set |
-| `claude_code_role_agents_set {role, agents}` | subagent definitions | 1 |
-| `claude_code_role_mcp_set`, `_plugins_set`, `_hosts_set {role, ...}` | MCP servers, Claude plugins, extra network hosts | always 2 (`role_widen`) |
-| `claude_code_role_ssh_grant` / `_revoke {role, target}` | SSH target grants (R12) | 1 for a registered target with restricted allowed commands or ask-each-time, audited (revoking cuts the role's live streams); 2 (`role_widen`, naming target, host, user and "any command") for a target that allows any command; an unregistered name is rejected, and only the user registers targets |
-| `claude_code_role_start {role, prompt, name?}` | a session in the role's VM (`claude-agent.start` with `role`), the Bot bound to it | as `claude_code_start`: one strong approval (`claude-code.start`), or none with a live project trust held by this Bot, never for a `bypassPermissions` role; same hidden-text checks and 5 an hour |
-| `claude_code_role_list {project?}`, `_get {role, version?}`, `_history {role}` | read | none |
-
-**Library skills follow or pin (R9).** A role that follows a skill is re-materialized as a new role version when a newer
-version is admitted (audit and history say `design-tokens 3 -> 4`; the change is by `library`, tier 1, never touches tools,
-hosts or MCP servers, and Revert undoes it). The check runs when the role's page is opened (at most every 30 seconds per
-role) and every 10 minutes from the plugin's poll loop (at most 12 roles and 40 library calls each time). A withdrawn
-version is dropped at the next check, audited per role (`role.library_dropped`); a deprecated one stays. A failure to
-reach the library (Rubi locked, no answer) is never read as a withdrawal. A skill the curator admitted for its own Bot is still tier 1 but marked: the attach's audit summary and the role page say "self-admitted by curator"; the role page also shows a withdrawn version as "withdrawn (removed at next start)" when the library says so. The panel's role page has **Pin to this
-version** and **Follow the latest** per library skill. Submitting an ad-hoc skill to the library is the Bot tool
-`rubi_library_submit` in Rubi's core; nothing in this plugin does it.
-
-**SSH targets (R12).** Rubi Home holds the target registry, the private keys and the pinned host keys and does the network
-work (`claude-agent.ssh.scan`, `.register`, `.list`, `.remove`, `.audit`); the project VM never sees a key or a host. The
-panel's **SSH targets** page (Projects, then SSH targets) lists each target (host key fingerprint, allowed commands, ask
-each time, the roles that have it, a warning when the host key changed). **Add** asks for `name host user [port]`, lets the
-user choose allowed commands and whether each command asks, then **Check the host key**: Rubi Home reads the server's key
-(no login), the user may paste the fingerprint they expect, and the strong approval `claude-code.ssh_target` (locked)
-carries `{name, host, port, user, fingerprint, allowed_commands, ask_each_time}`. Only after the approval does the plugin
-call `ssh.register`; Home refuses if the server's key is no longer the one confirmed. The public key line to install on
-the server is returned and shown as item text (with an `info` field for a panel that draws a copy button). **Remove**
-An allowed command is a command, `prefix *` (more arguments, no options) or `prefix **` (any arguments, options too; the draft and the
-approval warn that it lets the role pass options that run other programs); the plugin checks the shape as Home does, and a target
-with `*` or `**` patterns counts as allowing any command for the grant tier. **Remove**
-asks for confirmation, calls `ssh.remove` and takes the grant away from every role that names the target (the user's
-change, audited), so a later target with the same name starts clean; re-registering a removed name needs the draft's
-**Reuse a removed name** switch, which is shown in the approval and is the only way `reuse` is sent. Each target has an
-audit page (`ssh.audit`) and Home's stream entries are copied into Rubi's audit log (`ssh.stream`, at most every 5
-minutes): the plugin asks for the entries after the last `seq` it copied (kept per computer in the plugin's state; a Home that
-sends no `seq` gets the old newest-50 dedupe), and audits a summary with the number copied, the refusals and Home's refusal
-counters (`ssh.audit_copied`). A Bot can grant or revoke a registered target on a role it may change, nothing else: there is no Bot tool that
-registers or scans. When a target was registered with ask-each-time, Home sends an `ssh.ask` item; the plugin turns it
-into a strong approval (`claude-code.run`, one option) showing the role, target, host, port, user and the command exactly
-as Home sends it (line ends marked `⏎`, tabs `⇥`, spaces kept; hidden characters, those marks inside the command, or more
-than 1000 bytes are refused, never cut), in every mode. `ssh <target> ...` and `rubi-ssh` in a Bash call are also
-remote operations that always ask, and no 2-hour or project trust covers them; that is a second, independent check.
-
-**The tier comes from the difference, not from the tool.** The plugin reads the current version, builds the proposed
-one, and compares. It is tier 2 when anything grows in `mcp`, `plugins` or `hosts`; when a tool outside the safe set
-is added; when a deny rule the user (or another Bot) set is removed; when `default_mode` is above `role_mode_ceiling`;
-when an SSH target that isn't registered is granted, or one that allows any command (no limiting allowed-commands list, no ask-each-time); when the role is on a project where this Bot holds no live
-project trust (`Sister` is the Bot, `Project` the role's project, not expired or revoked); when the tool always asks
-(`mcp_set`, `plugins_set`, `hosts_set`); or when the role was created by someone else. **Ownership:** a Bot edits,
-archives and unarchives only the roles it created (tier 1); another Bot's roles and the user's are tier 2
-(`role_widen`), and inside a role it created, removing or rewriting a skill another Bot or the user wrote is tier 2
-too, so `skills_set`'s replace-all can't drop it silently. A change that is both on an untrusted project and
-widening asks as `role_widen` (`role_foreign` is the kind only when nothing widens). Otherwise it is tier 1: applied at
-once through `role.put`, audited. The headline of an approval lists what widens first; the full list of changes is in
-its preview. An MCP server is shown with its type and URL, or its whole command with every arg (each clipped), so a
-change of the args alone shows; a Bot's text that the user reads (MCP URLs and commands, plugin sources, hosts, deny
-rules) is refused with a reason when it has format, bidi, zero-width or control characters, an MCP URL is not https or
-carries credentials, or a host is not a host name (Home's syntax), before anyone is asked.
-
-**Bot identity.** The role's owner, the hourly role-change budget and the session-start budget all use the Bot's id
-(`botID`: lower case, characters other than letters, digits and `_.:@-` become `-`). Two Bot names that differ only in
-such characters (`My Bot` and `my-bot`) are one Bot to the roles and share an id, a count and a budget; project trusts
-still match names case-insensitively as before.
-
-**Results.** `{status: "applied", role, version, audit_id, tier, held_skills?}` (a change that alters nothing is
-`applied` with `unchanged: true` and makes no version); `{status: "needs_approval", approval_id, link, reasons,
-pending: {role, base_version, changes}}`; `{status: "rejected", reasons: [...]}` (a limit named, Home's validation
-reasons, a skill rejected by the scan). The pending request is **atomic**: nothing of it is applied until the user
-approves, and a request that mixes tiers waits as a whole. The plugin keeps at most 32 pending requests (8 per Bot,
-about 1.5 MiB of waiting skill text, dropped after 6 hours). The approval carries the touched fields with the value
-they had and the value to write; when it runs the plugin reads the role again, and if it is a newer version it
-**rebases**: the change applies only if every part it touches is still what it was, else it fails with "the role
-changed since you asked; ask again" and nothing is written. An approval runs once. A new MCP server or plugin gets
-the approval's id as its `approval` (Home refuses them without one) and Home spends an approval id once. A skill the
-user accepts is put with an id made when the user was asked (`sk_...`), never the kind's name. A revert to a version
-with an MCP server or plugin the current version doesn't have clears the old ids (Home spent them), so the approval
-that allows the revert supplies fresh ones. The test suite runs the plugin's `role.put` payloads against a fake Home
-that mirrors Home's `approvalRE` (`^[A-Za-z0-9_-]{1,64}$`) and single-use rules (the plugin can't import Home's
-internal roles package, which is not part of the Rubi module's public API).
-
-**Approval kinds.** `claude-code.role_foreign` (strong, locked: a role on a project the Bot holds no trust for, whatever
-the change that doesn't also widen), `claude-code.role_widen` (strong, locked), `claude-code.role_skill_accept` (tap, locked: the user accepts a
-held skill, seeing the rules the scan flagged and the excerpts; the plugin then puts the skill's `accepted` rule ids,
-`by: user`). The panel for it is R7; `askSkillAccept` / `executeSkillAccept` are the ops it will call. No Bot tool can
-accept a held skill.
-
-**Limits and the ceiling** are user config fields (the plugin settings, with the plugin config's strong approval); no
-Bot tool changes them: `role_max_per_project_per_bot` (5), `role_max_per_bot` (20; roles the Bot created, on
-that computer), `role_changes_per_hour_per_bot` (30; applied and asked changes), `role_max_skills` (20 per role),
-`role_max_adhoc_skills` (10 per role), `role_max_total` (50 per computer, archived roles included) and
-`role_mode_ceiling` (default `bypassPermissions`; ladder `plan` < `default` < `acceptEdits` < `auto` <
-`bypassPermissions`; `dontAsk` is not offered for roles). Over a limit the call is rejected with the setting named. **Archived roles count** toward `role_max_per_project_per_bot`
-and `role_max_per_bot`: Rubi Home has no delete, so archiving would otherwise free a place and a Bot could make roles
-without end. The user frees places by raising the limits in the plugin settings (a delete is for later). The session
-limits on the usage modes page (`claude-agent.limits`: sessions at once per role, per project, on the computer) are
-the user's own page: that op applies directly, like `usage_mode`, with no approval, and no Bot tool reaches it.
-
-**Starting in a role.** `claude_code_role_start`'s approval is for one version of the role: the ticket carries it and
-the session starts only if the role is still at that version, active, in the same mode ("the role changed since you
-approved; ask again"). The Bot is bound to the new session with the role recorded in the binding: every send, status,
-sessions and reply call for a bound session names the role (`withRole`), and events are routed by project, role and
-session, so a Bot bound to a role's session never addresses the legacy role or another role, nor receives theirs.
-A `net.ask` (a host the role's VM reached that nobody listed) is asked like a `cred.ask`, naming the role; allowing it
-adds the host to that role's approved hosts in Rubi Home.
-
-**Audit.** Every applied change writes `role.change {audit_id, role, project, device, from, to, by, tier, approval?,
-summary}` to Rubi's audit log (no skill text, no instructions: names and short facts) and is stored by Home as a
-version with the same `{op, tier, approval, summary}`. Skill scanning is Home's: the plugin does not import the
-scanner (the pinned Rubi module has none) and lets Home's verdict (`role.put` answers `skills[].state` and `verdict`)
-decide whether a skill is active or held.
-
-### Panel pages for the agent path (M6)
-
-When a computer reports `claude-agent`, the plugin's page gets a "Claude in project VMs" section linking to
-five pages (drill-down views of the same page; they need a Rubi whose panel knows `open` and `kind: "chat"`,
-see its plugin design note). **Projects**: sessions grouped by project, one section per project (VM state, how
-many sessions run of the per-project limit), the running ones marked "RUNNING now" with their subagent count,
-what waits in the queue with the plain reason Rubi Home gives ("waiting: project my-project already has 1
-session"), an Open chat button per session, **New session** per project (the panel asks for the first message in
-a box and starts a session in that project as you: mode `default`, no `from`, no `bot`, so it counts under the
-default usage mode) and Manage (the sessions page). A summary line says how many sessions run on the computer
-(`claude-agent.projects`, `.sessions` + `.status` `slots`/`limits`; an older Rubi Home with only the single
-`slot` still works). **Usage modes**: each Bot's mode, Maximum / Medium (Recommended) / Light, in plain words
-(quota against speed), with live counters (sessions x of y, subagents per session limit, the subagents running in
-each session), "Custom" when a limit in Rubi Home's configuration overrides the mode, a button per other mode for
-each Bot, one for the default (new Bots and your own sessions) and one that sets all Bots at once (with a
-confirmation). A change applies to new sessions: nothing running is stopped. The switch exists only as a button on
-this page (op `usage_mode`, audited as `agent_usage_mode_changed`): **no Bot tool changes a mode**, a test
-checks that the tools file never mentions it. **Sessions**: name, sister bound,
-mode and state, with Open chat, Rename (prompt), Fork (the source's mode, no approval: the page is the user's
-own request), Interrupt, Close and a mode picker (a stricter mode applies at once, a looser one goes through the
-strong approval, labelled "asks you"). **Chat**: the last 100 messages of `claude-agent.messages`, read
-leniently (`{type, message:{content}}` as the SDK gives them, plus `from` for the sender Home recorded); a
-message with a sender is shown as that sister's and marked "untrusted text"; tool calls are one-line summaries;
-the send box queues a message as the user (no `from`, never steering, at most 4000 characters) and Interrupt
-stops the turn. **Usage and sign-in**: today's estimate from `claude-agent.status` `usage_today` (a number of US
-dollars, or an object with `estimate_usd`/`cost_usd`/`total_cost_usd` and tokens) with a yellow notice above the
-setting `usage_warn_usd` (default 10; never blocks), and the login state from `login` (`logged_in`, `plan`,
-`account`). When signed out the page explains Anthropic's own sign-in on the computer running Rubi Home; it has
-no button and Rubi never handles the credentials. A user-role message counts as the user's own only if it has no `from` and its text does not start with the runner's first line `[message from <from>]` (the plugin depends on that runner prefix; see the runner's README); anything with either, or in a shape the plugin doesn't know, is shown as another sender's ("Bot: name") and untrusted. Tool lines show the full command or URL (up to 300 characters), so the user sees what Claude ran. Interrupt, close (also when Home refuses), send, fork and rename are audited
-(`agent_panel_action`, `message_sent`, `session_forked`, `session_renamed`). Starting a session from a project's New
-session button is audited as `agent_panel_action` (`start`).
-
-`claude-agent.start` and `.send` from a Bot carry `bot`, a stable id the plugin derives from the Bot's name
-(lower case, other characters become `-`, at most 64, a short hash when nothing is left), next to `from`, so Rubi
-Home applies that Bot's mode to the session and its subagents. The plugin never sends limits itself: Rubi Home
-keeps the table of modes.
-
-### Setting up the agent path (the setup page)
-
-When a computer's Rubi Home reports `agent-setup` (probed with `agent-setup.status`, remembered like the
-`claude-agent` probe), the plugin's page gets a "First-time setup" entry that opens a page with one section per
-step: Apple's container tool, its service, the runner image,
-the one Claude sign-in for the whole computer (the token stays in Rubi Home; the VMs never hold it, Rubi Home's auth
-gateway adds it to their requests to Anthropic) and a self-test per project (the contract is `docs/design/home-setup-wizard.md` in the Rubi
-repository). Each step shows its state and reason, the last 20 progress lines while it works, and its buttons;
-the status is a full probe of the machine, so its capability probe waits 15 seconds, a status is reused for 2
-seconds, and a computer known to have the capability stays listed through a slow probe; a project id is checked
-against a fresh status before it is forwarded; the page reloads itself every 3 seconds while a job runs or a sign-in waits, and not otherwise. A button is drawn
-from the `action` Rubi Home names on a step row (`install`, `upgrade`, `start`,
-`build`) or a project row (`remove`, `selftest`); the sign-in is one row for the computer (`check`, `login`, `login_again`, and `action2: sign_out`); no `action`, no button.
-"Check the sign-in" runs `login` without a method, which only probes. The project folders are no step: they are
-listed after the steps with Remove, and a Bot adds one when the user asks it (`claude_code_project_add {dir}`, one
-strong approval of kind `claude-code.setup.project` that shows the folder; then `agent-setup.project.add {dir}`,
-which core lets through only while that approval of exactly that folder is being executed). "Paste the code" is
-offered as soon as the sign-in link is, whether or not Rubi Home recognized Claude's prompt.
-
-Approvals: **Install / Upgrade** (`claude-code.setup.install`)
-and **adding a folder** (`claude-code.setup.project`, asked by a Bot) are strong approvals; the call to Rubi Home
-(`agent-setup.run {step}` / `agent-setup.project.add {dir}`) is made only after approval. Start, Build / Update, Remove, Sign in (`run {step: login, method: claudeai}`; the computer's one sign-in, a Claude subscription only), Sign out (`run {step: signout}`, with a confirmation), Open the sign-in page, Paste the code, Run
-self-test and Cancel are the user's own request and need none. **Set up everything** (`agent-setup.run {step:
-"all"}`) is offered only once the container step is done, and is refused again when pressed if
-it is not, so it cannot get past that approval. The sign-in code typed into "Paste the code" goes to
-`agent-setup.login.code` (without a project) and nowhere else: it is not stored, logged or audited (the audit says "sign-in code
-sent"); a panel that does not send the `code` key is refused. What Rubi Home reports (reasons, progress lines,
-the sign-in link) is untrusted text: clipped, shown as item text only, and the link is offered only when it is
-`https://`. Bots have no tool for any of it, except asking to add a folder. Subscription sign-in is for the user's own personal use under
-Anthropic's terms (the token stays in Rubi Home; the VMs never hold it), and macOS shows its own administrator dialog on the computer for Install; the page never asks
-for a password. Actions are audited as `agent_setup_action`.
-
-The page ends with a **Usage mode** section when the computer also reports `claude-agent` and its status carries
-the usage modes: Maximum (fastest, uses the most quota), Medium (Recommended: up to 4 sessions, 4 subagents each)
-and Light (1 session, 2 subagents), the current default marked, and a "Use for all Bots" button per mode
-(`claude-agent.usage_mode {mode, all: true}`, the same user-only op as the usage modes page; a Bot has no tool for
-it).
-
-### Events and items the plugin expects from Rubi Home (addendum to the contract)
-
-`claude-agent.next` returns `{items:[...]}`; each item has `type`:
-
-- `perm.ask` and `cred.ask`: `ask_id`, `project`, `role` (an isolated role's id; the legacy role's is the project's),
-  `session_id`, `tool`, `input` (the tool input as JSON), `cwd`, `mode`, optionally `agent_id`, `agent_type`, `expires_at`. A `cred.ask` has no tool (it is always an
-  approval).
-- `cred.ask`: `ask_id`, `project`, `host`, `path` (the repository path), `op`; `net.ask`: `ask_id`, `project`,
-  `host`, `op` (`connect`). Both are answered with `claude-agent.decide` and denied when a field is missing.
-- `event`: `project`, `role` (as above), `session_id` and the runner's event nested in `event` (`{"kind": ..., ...}`; flat fields
-  are read too), `kind` and, by kind:
-  - `result`: `text` (the turn's final text), `to` (the Bot that started the turn with `claude-agent.send` or
-    `.start` `from`; **Rubi Home must set it, and leave it empty for turns the user started**, because the
-    text goes to that Bot only), `in_reply_to` (message ids), `is_error`. Becomes `claude_reply`.
-  - `sister_reply` (the in-process `rubi_reply` tool): `text`, `to`, `in_reply_to`. Becomes `claude_reply`.
-  - `sister_ask` (the in-process `rubi_ask` tool): `ask_kind`, `text`. Becomes `claude_ask` for the Bot bound to
-    that session, or else a Bot bound in the same project.
-  - `message`: `id`, `to`, `state` (`delivered`, `answered`, `expired`; `queued` is ignored), `at`. Becomes
-    `claude_message`.
-  - `assistant`, `tool`, `status`, `rate_limit`, `background`, `error`, `ask`: for the panel (M6), not forwarded.
-  - An ask goes to the Bot bound to the asking session only; an ask from an unbound session is dropped.
-
-The plugin does not check a digest of the tool input on this path: Rubi Home's `claude-agent.decide` works
-once per `ask_id` and Home hands each `ask_id` out once, so an approval can answer only the question it was
-made for. The plugin keeps a hash of the input in the approval's payload for the audit trail only.
-
-Results the plugin reads: `claude-agent.projects` `{projects:[{id, dir, vm_state, slot_busy (the project's slots are full), sessions_running, queue}]}`;
-`claude-agent.sessions` `{sessions:[{id, name, created, last_activity, mode, busy}]}`;
-`claude-agent.status` `{login:{logged_in}, slots:[{project, session, bot, busy, background, subagents}],
-limits:{per_project, total}, usage:{default, modes, bots:[{id, mode, custom, sessions_running, sessions_limit,
-subagents_per_session}]}, slot:{busy, project, session} (the first busy slot, for older readers), queue:[{project,
-session, op, from, position, reason}]}`; `claude-agent.usage_mode {mode, bot | default | all}` (panel only); `claude-agent.start` `{id}` or `{queued:true, position}`; `claude-agent.send`
-`{queued, position, delivered?}`; `claude-agent.fork` `{id}`.
-
-## Set up on a Mac
-
-You need Rubi v0.14.0-rc.2 or later with this plugin installed, and Claude Code v2.1.295 or later (for
-`onFailure`).
-
-1. **Install Rubi Home** (skip if you have it):
-
-   ```sh
-   curl -fsSL https://rubi-panel.com/install-home.sh | sh
-   ```
-
-   It installs `~/.rubi-home/bin/rubi-home`, starts it at login and prints a pairing code.
-
-2. **Put the hook's binary where Claude can't replace it** (owned by root). Rubi Home installs itself
-   as `~/.rubi-home/bin/rubi-home` and updates itself, but Claude Code must run a copy no process of yours
-   can swap, so this one is installed by you, with an administrator prompt:
-
-   ```sh
-   ~/.rubi-home/bin/rubi-home install-hook
-   ```
-
-   It shows the binary's sha256 and the exact script, then asks macOS for an administrator password. As
-   root the script copies the file once, checks that copy against the shown hash and only then moves it to
-   `/usr/local/bin/rubi-home` (root-owned, mode 0755); it refuses a target whose directories anyone but
-   root can write, and afterwards the command re-checks the file and its `version`. The hash only says
-   which file will be installed: if you got Rubi Home from a release, compare it with that release's
-   `SHA256SUMS`. `--dry-run` shows the plan without running anything, `--to PATH` picks another target,
-   `--sudo` uses `sudo` in a terminal instead of the dialog, `--with-claude-plugin` also installs the
-   sister tools' plugin (see above). Run it again after each Rubi Home update:
-   every hook line carries the hook's version (self-reported, so advisory), Rubi Home logs a warning when
-   this copy is older, `rubi-home status` shows its version, hash and ownership, `install-home.sh` warns
-   after an upgrade, and `claude_code_sessions` reports a problem for that computer ("the Claude Code
-   hook binary on ... is v...: run `~/.rubi-home/bin/rubi-home install-hook` there"). A hook that speaks a
-   protocol Rubi Home doesn't know is denied (events are ignored) until it is updated; a hook from before
-   v0.13 still works but is reported as old.
-
-   Manual fallback, if the dialog is not an option:
-
-   ```sh
-   sudo install -o root -g wheel -m 755 ~/.rubi-home/bin/rubi-home /usr/local/bin/rubi-home
-   ```
-
-   `claude-hook` only talks to the running helper; it reads no configuration and writes nothing.
-
-3. **Pair it with Rubi.** Run `rubi-home pair` if the code has expired, then in the Rubi panel open
-   Settings > Rubi Home > Add a home computer, paste the code and approve. Check that the fingerprint
-   matches `rubi-home status`.
-
-4. **Install the plugin.** Ask your agent: "Install the Claude Code plugin from the Rubi store", approve
-   the install screen (it names the `claude` capability), and let your Bot subscribe to its events.
-
-5. **Install the managed settings** (they apply to every Claude Code session on this Mac, and users can't
-   override them):
-
-   ```sh
-   sudo mkdir -p "/Library/Application Support/ClaudeCode"
-   sudo install -o root -g wheel -m 644 examples/managed-settings.json \
-     "/Library/Application Support/ClaudeCode/managed-settings.json"
-   ```
-
-   If you already have a managed settings file, merge the keys instead of replacing it.
-   [`examples/managed-settings.json`](examples/managed-settings.json):
-   - runs `/usr/local/bin/rubi-home claude-hook` for every Bash permission request, with a 300-second
-     timeout and `onFailure: block` (Rubi Home gives up at 280 seconds, so Claude Code's timeout never
-     decides);
-   - `allowManagedHooksOnly`: hooks from your own, project or local settings don't apply, so neither you
-     nor Claude can add one that replaces Rubi's. The example leaves out `allowManagedPermissionRulesOnly`,
-     so allow rules in your own or a project's settings still let matching commands run without asking
-     Rubi; add it if you want every such command to go through Rubi, at the cost of more approvals.
-   - turns off auto mode and leaves bypassPermissions allowed (see
-     [Sessions with bypassPermissions](#sessions-with-bypasspermissions) for turning it off too);
-   - denies Claude's edits to `~/.claude`, `~/.claude.json`, a project's `.claude/`, the managed settings
-     directory, the hook binary and Rubi Home's files;
-   - a `ConfigChange` hook that keeps settings edits from applying to a running session;
-   - `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd` hooks that bring Bots' messages in and
-     the answers out (10-second timeout, never blocking: when Rubi Home doesn't answer they do nothing);
-   - a second `Stop` hook, `claude-hook --wait` (`asyncRewake: true`, 3600-second timeout), that wakes an
-     idle session when a Bot's message arrives (see [Waking an idle session](#waking-an-idle-session)).
-     Add it with `sudo` like the rest, then restart Claude Code;
-   - `extraKnownMarketplaces` (marketplace `rubi`, a `directory` source at
-     `/Library/Application Support/Rubi Home/claude-plugin`), `enabledPlugins` (`rubi-sisters@rubi`) and one
-     allow rules for the two read-only tools (`rubi_sisters`, `rubi_inbox_status`; `rubi_ask` and
-     `rubi_reply` still prompt), for the
-     [sister tools](#the-sister-tools-inside-claude-code); run
-     `rubi-home install-hook --with-claude-plugin` first so the folder exists.
-
-6. **Try it.** Restart Claude Code and ask it to run `rm -rf /tmp/rubi-test`. The Rubi approval link
-   arrives through your Bot; approve it and the command runs. Lock Rubi and try again: it is denied.
-
-Check the waiter by hand (after adding the second `Stop` hook and restarting Claude Code):
-
-1. In the desktop app, let a session go idle (bound to a Bot).
-2. From the Bot, send it a message with `claude_code_send`; the result should say `waiter: true`.
-3. Within seconds the session should resume with the message as a system reminder and answer; the Bot
-   gets `claude_message` `delivered`, then the `claude_reply` and `answered`.
-4. Also check that typing a prompt in an idle session ends the waiter: the message is delivered once.
-
-Claude Code's documentation doesn't promise that a `Stop` hook may use `asyncRewake`, or say what happens
-to a running background hook when you send a new prompt, so this check is worth doing once.
-
-To turn it off, remove the hooks (or the file) from the managed settings. Without them, Claude Code
-asks in its own prompt again.
-
-### Limits
-
-- The boundary is your macOS user account. Another program running as you can talk to Rubi Home's socket
-  (it can only ask) or change Rubi Home's files; it can't answer for you.
-- Read and Edit deny rules cover Claude's file tools and the file commands Claude Code recognizes in Bash,
-  not every program a command starts. That is why every Bash command needs your approval.
-- A binding is made for the Bot Rubi verified (`rubi_agent` with the `agent_code` from its own webhook;
-  Rubi passes the plugin the registered name), not a name the Bot typed. Its code, handed only to that
-  Bot, keeps other Bots from sending as it. Replies and asks go to that Bot's webhook only: if it isn't
-  connected any more, Rubi drops them (and audits that) instead of waking another Bot.
-- `git diff` and `git log` honour the repository's configuration (for example an external diff tool), and
-  `cat` follows symlinks; an approval for `run_safe` still shows the exact command and directory.
+- **Rubi Home: `t3-agent`** and **Rubi Home: `t3-setup`**, on your paired computers. Nothing else.
+- Actions (all under the plugin id `t3agents`): `run` (any command; strong, can't be lowered), `run_safe` (tap),
+  `bind`, `trust_project`, `rename`, `start`, `fork`, `fork_own`, `mode`, `agent_question`, `role_foreign`,
+  `role_widen`, `role_skill_accept`, `ssh_target`, `setup.install` and `setup.project`.
+
+## Bot tools
+
+| Tool | What |
+|---|---|
+| `t3_sessions` | The threads of your agent projects, with state, mode, name and which Bot each is bound to |
+| `t3_bind` / `t3_unbind` | Bind a Bot to one thread (one strong approval), or end the binding |
+| `t3_start` | Start a thread in a project with a task and an optional `brief` (one strong approval, or none inside a trusted project; at most 5 an hour) |
+| `t3_send` / `t3_status` | Message the bound thread (at most 4000 characters, 30 an hour; `brief_id` repeats the standing orders) and see how it stands |
+| `t3_fork` / `t3_mode` / `t3_rename` | Fork a thread, change its mode, give it a name |
+| `t3_project_add` | Ask the user to add a folder as a project (one strong approval) |
+| `t3_trust_project` / `t3_mandates` | Ask for a project trust; list and revoke trusts |
+| `t3_role_create`, `_update`, `_archive`, `_unarchive`, `_skills_set`, `_skills_add`, `_skills_remove`, `_tools_set`, `_agents_set`, `_mcp_set`, `_plugins_set`, `_hosts_set`, `_ssh_grant`, `_ssh_revoke`, `_start`, `_list`, `_get`, `_history` | Roles |
+
+The Bot is always the one Rubi verified (`rubi_agent` with the `agent_code` of its own webhook), never a name it
+typed. A binding gives the Bot a bind code (sent to that Bot alone, in a `t3_bound` event); `t3_send`,
+`t3_status`, `t3_unbind` and `t3_trust_project` need it. A refusal says which of "no binding", "unknown code",
+"superseded code" and "another Bot's code" it is. Bindings and codes are kept across restarts of the plugin.
+What a thread says comes back to its Bot as `t3_reply` (answers), `t3_ask` (questions) and
+`t3_message` (delivery states) events.
+
+## Rubi Home operations used
+
+`t3-agent.`: `projects`, `sessions`, `start`, `send`, `messages`, `next`, `decide`, `status`, `close`, `interrupt`,
+`fork`, `mode`, `rename`, `limits`, `usage_mode`, `role.list`, `role.get`, `role.history`, `role.diff`,
+`role.put`, `ssh.scan`, `ssh.register`, `ssh.list`, `ssh.remove`, `ssh.audit`.
+`t3-setup.`: `status`, `run`, `login.open`, `login.code`, `project.add`, `project.remove`, `cancel`.
+And the host method `library.get`.
+
+## The setup page
+
+One page per computer, opened from the plugin's first page, with buttons only. It shows the steps Rubi Home
+lists in `t3-setup.status`, in order, and the one button Home names for each:
+
+1. **Apple container**: install (a strong approval first; macOS shows its own administrator dialog).
+2. **Container service**: start.
+3. **Runner image**: build or update.
+4. **T3 installed and pinned**: install or update to the pinned version.
+5. **T3 paired with Rubi**: pair.
+6. **Provider sign-in per role**: each role has its own row. Sign-in relays Claude's `claude auth login`:
+   open the link (shown as text, opened by a button), sign in, paste the code into the box that appears with the
+   link. The code goes to Rubi Home and is never kept or audited.
+7. **Self-test**, per project.
+
+The project folders are listed apart, with Remove; a Bot adds one when you ask it (`t3_project_add`). The page
+refreshes every 3 seconds while a step runs or a sign-in waits, and not otherwise.
+
+## Limits
+
+- The boundary is your macOS user account and the role VMs.
+- Titles, names and everything an agent or a thread says are untrusted text: clipped, shown as text only.
+- `git diff` and `git log` honour the repository's configuration; an approval for a read-only command still shows
+  the exact command and directory.
 
 ## Development
 
 ```sh
-go build -o claude-code . && go test -race ./...
-e2e/run.sh   # Linux, needs `unshare -rn`: a real Rubi, Rubi Home and this plugin, offline
+go build -o t3agents . && go vet ./... && go test -race ./...
+./t3agents --manifest
 ```
 
-The plugin builds on the Rubi SDK (`Host.WaitApproval`, `Host.LibraryGet` since v0.14.0-rc.2) and needs a v0.14.0-rc.2 core at run time
-(Rubi Home's `claude-start` capability, the panel's view prompt, `claude-sessions.bound`; v0.12.0 brought
-`claude-sessions`, strict delivery of addressed events and `rubi_verified_agent`).
-The e2e builds Rubi and Rubi Home from a core checkout, `../rubi` by default or `RUBI_REPO`; it needs a
-v0.14.0-rc.2 (or newer) core. `PublisherKey` is the Rubi-Project plugin key (public half in
-`publisher-key.pub.pem`); only the end-to-end test overrides it, with a throwaway key.
-
-The end-to-end test builds everything with `-race`, runs it in a network namespace with only loopback,
-installs the plugin from a signed local store, pairs Rubi Home through the panel API and checks six
-endings through the real `rubi-home claude-hook`: approve → allow, deny → deny with the reason, no answer
-→ deny, a passkey tap on a safe command → allow, a tap on any other command → refused (it stays pending),
-and Rubi locked → deny.
+The plugin builds on the Rubi SDK (`github.com/Deikus-LXXVII/rubi/sdk/rubiplugin`) and needs a Rubi that knows the
+`t3-agent` and `t3-setup` capabilities of Rubi Home. `PublisherKey` is empty in the source; the maintainer's
+release build sets it with `-ldflags "-X main.PublisherKey=..."`.
 
 ## License
 

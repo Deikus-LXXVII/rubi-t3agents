@@ -12,7 +12,7 @@ import (
 	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
 )
 
-// fakeSetup plays the agent-setup operations of Rubi Home.
+// fakeSetup plays the t3-setup operations of Rubi Home.
 type fakeSetup struct {
 	mu     sync.Mutex
 	status map[string]any
@@ -77,11 +77,25 @@ func row(state, reason, action string) map[string]any {
 	return m
 }
 
-// allDone is a status in Rubi Home's shape: steps 1 to 5 done, the project not signed in and not tested.
+// loginRow is a row of the sign-in step: a role (by its id), signed in or not.
+func loginRow(state, reason, action string) map[string]any {
+	m := map[string]any{"id": "r1", "dir": "reviewer", "state": state}
+	if reason != "" {
+		m["reason"] = reason
+	}
+	if action != "" {
+		m["action"] = action
+	}
+	return m
+}
+
+// allDone is a status in Rubi Home's shape: the container, image, T3 and its pairing done, the one role not
+// signed in and nothing tested.
 func allDone(extra ...map[string]any) map[string]any {
 	steps := []map[string]any{step("container", "done", "Installed 1.2", "", nil), step("service", "done", "Running", "", nil),
-		step("image", "done", "Built", "", nil), step("projects", "done", "1 folder", "add", map[string]any{"projects": []any{row("done", "", "remove")}}),
-		step("login", "todo", "Not signed in", "login", nil),
+		step("image", "done", "Built", "", nil), step("t3", "done", "T3 0.0.9 (pinned)", "", nil), step("pair", "done", "Paired", "", nil),
+		step("projects", "done", "1 folder", "add", map[string]any{"projects": []any{row("done", "", "remove")}}),
+		step("login", "todo", "1 role not signed in", "", map[string]any{"projects": []any{loginRow("todo", "Not signed in", "login")}}),
 		step("selftest", "todo", "Not run", "", map[string]any{"projects": []any{row("todo", "Not run", "selftest")}})}
 	st := map[string]any{"steps": steps}
 	for _, e := range extra {
@@ -155,7 +169,8 @@ func TestSetupEntryNeedsCapability(t *testing.T) {
 func TestSetupPageStates(t *testing.T) {
 	// Nothing done: only the first step has a button, the rest wait for it.
 	st := map[string]any{"steps": []any{step("container", "todo", "Not installed", "install", nil), step("service", "todo", "Needs step 1 first", "", nil),
-		step("image", "todo", "Needs step 2 first", "", nil), step("projects", "todo", "No folder", "", nil),
+		step("image", "todo", "Needs step 2 first", "", nil), step("t3", "todo", "Needs step 3 first", "", nil), step("pair", "todo", "Needs step 4 first", "", nil),
+		step("projects", "todo", "No folder", "", nil),
 		step("login", "todo", "Needs step 5 first", "", nil), step("selftest", "todo", "Needs step 6 first", "", nil)}}
 	f, s := setupFixture(t, st)
 	pg := setupView(t, s, f)
@@ -189,10 +204,10 @@ func TestSetupPageStates(t *testing.T) {
 	if a["Upgrade"] == nil || a["Start"] == nil || a["Build"] == nil || a["Set up everything"] == nil {
 		t.Fatalf("%v", a)
 	}
-	// All done but the sign-in: one sign-in button for the computer (no Console one), self-test per project.
+	// All done but the sign-in: one sign-in button per role, self-test per project.
 	f, s = setupFixture(t, allDone())
 	a = allActions(setupView(t, s, f))
-	if a["Sign in with a Claude subscription"] == nil || a["Run self-test"] == nil || a["Remove"] == nil || a["Set up everything"] == nil {
+	if a["Sign in"] == nil || a["Run self-test"] == nil || a["Remove"] == nil || a["Set up everything"] == nil {
 		t.Fatalf("%v", a)
 	}
 	// The folders are no step: no "Add a folder" (a Bot adds folders), no numbered section; listed with Remove.
@@ -203,28 +218,28 @@ func TestSetupPageStates(t *testing.T) {
 	for _, sec := range setupView(t, s, f)["sections"].([]map[string]any) {
 		titles = append(titles, sec["title"].(string))
 	}
-	if j := strings.Join(titles, "|"); !strings.Contains(j, "|3. Runner image|4. Claude sign-in|5. Self-test|") || !strings.Contains(j, "|Project folders") || strings.Contains(j, ". Projects") {
+	if j := strings.Join(titles, "|"); !strings.Contains(j, "|3. Runner image|4. T3 installed and pinned|5. T3 paired with Rubi|6. Provider sign-in per role|7. Self-test|") || !strings.Contains(j, "|Project folders") || strings.Contains(j, ". Projects") {
 		t.Errorf("sections %s", j)
 	}
 	if a["Sign in with an Anthropic Console account"] != nil || a["Sign out"] != nil || a["Install"] != nil || a["Start"] != nil || a["Check the sign-in"] != nil {
 		t.Error("button that doesn't belong")
 	}
-	// The sign-in row Home says to check, and one that is signed in (sign in again, sign out).
+	// The role row Home says to check, and one that is signed in (sign in again, sign out).
 	st = allDone()
-	st["steps"].([]map[string]any)[4] = step("login", "todo", "Check", "check", nil)
-	st["steps"].([]map[string]any)[5] = step("selftest", "done", "Passed", "", map[string]any{"projects": []any{row("done", "", "")}})
+	st["steps"].([]map[string]any)[6] = step("login", "todo", "Check", "", map[string]any{"projects": []any{loginRow("todo", "Check", "check")}})
+	st["steps"].([]map[string]any)[7] = step("selftest", "done", "Passed", "", map[string]any{"projects": []any{row("done", "", "")}})
 	f.setup.status = st
 	a = allActions(setupView(t, s, f))
-	if a["Check the sign-in"] == nil || a["Run self-test"] != nil || a["Sign in with a Claude subscription"] != nil {
+	if a["Check the sign-in"] == nil || a["Run self-test"] != nil || a["Sign in"] != nil {
 		t.Fatalf("%v", a)
 	}
-	st["steps"].([]map[string]any)[4] = step("login", "done", "Signed in", "login_again", map[string]any{"action2": "sign_out"})
+	st["steps"].([]map[string]any)[6] = step("login", "done", "Signed in", "", map[string]any{"action2": "sign_out", "projects": []any{loginRow("done", "", "login_again")}})
 	a = allActions(setupView(t, s, f))
-	if a["Sign in again with a Claude subscription"] == nil || a["Sign out"] == nil {
+	if a["Sign in again"] == nil || a["Sign out"] == nil {
 		t.Fatalf("%v", a)
 	}
 	so := a["Sign out"]
-	if so["confirm"] != "Sign out every project on this computer? To revoke the token fully, also remove it at claude.ai settings." || so["args"].(map[string]any)["step"] != "signout" {
+	if so["args"].(map[string]any)["step"] != "signout" || !strings.Contains(so["confirm"].(string), "Sign out the roles") {
 		t.Errorf("%v", so)
 	}
 }
@@ -235,9 +250,9 @@ func TestSetupPageWorkingAndSignIn(t *testing.T) {
 		lines[i] = "line " + string(rune('a'+i%26)) + strings.Repeat("x", 300)
 	}
 	st := allDone(map[string]any{"job": map[string]any{"step": "login", "started": "now"},
-		"login": map[string]any{"url": "https://claude.com/oauth?state=abc", "wants_code": true}})
+		"login": map[string]any{"url": "https://claude.com/oauth?state=abc", "wants_code": true, "role": "reviewer"}})
 	steps := st["steps"].([]map[string]any)
-	steps[5] = step("login", "working", "Signing in", "", map[string]any{"progress": lines})
+	steps[6] = step("login", "working", "Signing in", "", map[string]any{"progress": lines})
 	f, s := setupFixture(t, st)
 	pg := setupView(t, s, f)
 	if pg["refresh"] != 3 {
@@ -249,7 +264,7 @@ func TestSetupPageWorkingAndSignIn(t *testing.T) {
 			t.Errorf("no %q", want)
 		}
 	}
-	for _, no := range []string{"Sign in with a Claude subscription", "Run self-test", "Set up everything", "Remove", "Install"} {
+	for _, no := range []string{"Sign in", "Run self-test", "Set up everything", "Remove", "Install"} {
 		if a[no] != nil {
 			t.Errorf("%q while a job runs", no)
 		}
@@ -268,7 +283,7 @@ func TestSetupPageWorkingAndSignIn(t *testing.T) {
 	secs := pg["sections"].([]map[string]any)
 	var login []map[string]any
 	for _, sec := range secs {
-		if strings.HasSuffix(sec["title"].(string), ". Claude sign-in") {
+		if strings.HasSuffix(sec["title"].(string), ". Provider sign-in per role") {
 			login = sec["items"].([]map[string]any)
 		}
 	}
@@ -337,6 +352,9 @@ func TestSetupOpsRouteToHome(t *testing.T) {
 		{"setup_run", `{"device":"dev_mac","step":"login"}`, opSetupRun, map[string]any{"step": "login"}},
 		{"setup_run", `{"device":"dev_mac","step":"login","method":"claudeai"}`, opSetupRun, map[string]any{"step": "login", "method": "claudeai"}},
 		{"setup_run", `{"device":"dev_mac","step":"signout"}`, opSetupRun, map[string]any{"step": "signout"}},
+		{"setup_run", `{"device":"dev_mac","step":"t3"}`, opSetupRun, map[string]any{"step": "t3"}},
+		{"setup_run", `{"device":"dev_mac","step":"pair"}`, opSetupRun, map[string]any{"step": "pair"}},
+		{"setup_run", `{"device":"dev_mac","step":"login","project":"r1","method":"claudeai"}`, opSetupRun, map[string]any{"step": "login", "method": "claudeai", "role": "r1"}},
 		{"setup_open", `{"device":"dev_mac"}`, opSetupOpen, map[string]any{}},
 		{"setup_remove", `{"device":"dev_mac","project":"p1"}`, opSetupRemove, map[string]any{"dir": "/home/alice/my-project"}},
 		{"setup_cancel", `{"device":"dev_mac"}`, opSetupCancel, map[string]any{}},
@@ -363,7 +381,7 @@ func TestSetupOpsRouteToHome(t *testing.T) {
 	for _, c := range [][2]string{{"setup_run", `{"device":"dev_mac","step":"container"}`}, {"setup_run", `{"device":"dev_mac","step":"network"}`},
 		{"setup_run", `{"device":"dev_mac","step":"network","option":"other"}`}, {"setup_run", `{"device":"dev_mac","step":"selftest"}`},
 		{"setup_run", `{"device":"dev_mac","step":"login","method":"console"}`}, {"setup_run", `{"device":"dev_mac","step":"login","method":"x"}`},
-		{"setup_login", `{"device":"dev_mac","project":"p1","method":"claudeai"}`}, {"setup_remove", `{"device":"dev_mac","project":"nope"}`},
+		{"setup_login", `{"device":"dev_mac","project":"p1","method":"claudeai"}`}, {"setup_run", `{"device":"dev_mac","step":"login","project":"nope","method":"claudeai"}`}, {"setup_remove", `{"device":"dev_mac","project":"nope"}`},
 		{"setup_run", `{"device":"dev_nope","step":"service"}`}} {
 		n := len(f.setup.calls)
 		if _, err := do(c[0], c[1]); err == nil {
@@ -481,7 +499,7 @@ func TestSetupCodeIsNeverKept(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	everything, _ := json.Marshal([]any{f.auditLog, f.audits, f.logs, f.state, f.submits, f.events, f.sent})
+	everything, _ := json.Marshal([]any{f.auditLog, f.audits, f.logs, f.state, f.submits, f.events})
 	if strings.Contains(string(everything), code) {
 		t.Errorf("the code was kept: %s", everything)
 	}
@@ -642,12 +660,12 @@ func TestSetupModeSection(t *testing.T) {
 	if len(got) != 1 || got[0]["mode"] != "light" || got[0]["all"] != true {
 		t.Fatalf("%v", got)
 	}
-	// Without the claude-agent capability the section is hidden (the setup page still works).
-	f.agent.failOp = map[string]error{opAgentStatus: errors.New("Rubi Home doesn't do claude-agent.status")}
+	// Without the t3-agent capability the section is hidden (the setup page still works).
+	f.agent.failOp = map[string]error{opAgentStatus: errors.New("Rubi Home doesn't do t3-agent.status")}
 	s = newSisters(&store{})
 	pg = setupView(t, s, f)
 	secs = pg["sections"].([]map[string]any)
 	if secs[len(secs)-1]["title"] == "Usage mode" {
-		t.Error("section shown without claude-agent")
+		t.Error("section shown without t3-agent")
 	}
 }

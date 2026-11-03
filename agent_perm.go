@@ -1,12 +1,12 @@
 package main
 
-// Permissions on the agent path. Rubi Home hands every tool call of the runner (claude-agent.next, item
-// perm.ask) and every git credential request (cred.ask) to the plugin, which answers with claude-agent.decide.
+// Permissions on the agent path. Rubi Home hands every tool call of the runner (t3-agent.next, item
+// perm.ask) and every git credential request (cred.ask) to the plugin, which answers with t3-agent.decide.
 // Order of decision:
 //
 //  1. AskUserQuestion: shown to the user as an approval with the question's options.
 //  2. The always-ask list, in every mode: git push and other remote git commands, --force, sudo, the network
-//     outside the allow-list (curl/wget/WebFetch to other hosts), paths outside /work, anything under .rubi,
+//     outside the allow-list (curl/wget/WebFetch to other hosts), paths outside the project, anything under .rubi,
 //     edits under .claude, tags and releases. A strong approval; nothing a trust says changes that.
 //  3. bypassPermissions: allow.
 //  4. A stricter mode (plan, default, acceptEdits): a live 2-hour or project trust (mandate.go, projecttrust.go)
@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	kindAgentQuestion = "claude-code.agent_question"
+	kindAgentQuestion = "t3agents.agent_question"
 	maxQuestionBytes  = 16 << 10
 )
 
@@ -48,7 +48,7 @@ var (
 
 // ---- handling a question ----
 
-// agentDecision is claude-agent.decide's input.
+// agentDecision is t3-agent.decide's input.
 type agentDecision struct {
 	AskID        string `json:"ask_id"`
 	Behavior     string `json:"behavior"`
@@ -92,7 +92,11 @@ func (w *watcher) handleAsk(ctx context.Context, d rubiplugin.HomeDevice, it age
 	}
 	deny := func(msg string) { w.agentDecide(ctx, d, it.AskID, "deny", msg) }
 	allow := func() { w.agentDecide(ctx, d, it.AskID, "allow", "") }
-	cwd := firstNonEmpty(it.Cwd, agentRoot)
+	// The project's real path on the computer (the role VM mounts it at the same path): what a trust is keyed on and
+	// what a question's directory must be inside.
+	root := w.s.projectRoot(ctx, w.h, d.ID, it.Project)
+	it.root = root
+	cwd := firstNonEmpty(it.Cwd, root)
 	tool := it.Tool
 	// The isolated role the question comes from (its id is checked: it is shown in the approval).
 	if r := normRole(it.Project, it.Role); r != "" && !roleIDRE.MatchString(r) {
@@ -132,6 +136,10 @@ func (w *watcher) handleAsk(ctx context.Context, d rubiplugin.HomeDevice, it age
 		w.askQuestion(ctx, d, it, deny)
 		return
 	}
+	if root == "" {
+		w.agentApprove(ctx, d, it, kindRun, cwd, tool, "Rubi Home did not report this project's path, so Rubi can't tell what is inside it", true, deny)
+		return
+	}
 	reason := ""
 	switch {
 	case it.Type == "cred.ask":
@@ -141,7 +149,7 @@ func (w *watcher) handleAsk(ctx context.Context, d rubiplugin.HomeDevice, it age
 	case it.Type == "ssh.ask":
 		reason = "an SSH command on a target you asked to be asked about each time"
 	default:
-		reason = agentAlwaysAsk(tool, it.Input, cwd)
+		reason = agentAlwaysAsk(root, tool, it.Input, cwd)
 	}
 	if reason != "" {
 		w.agentApprove(ctx, d, it, kindRun, cwd, tool, reason, true, deny)
@@ -158,7 +166,7 @@ func (w *watcher) handleAsk(ctx context.Context, d rubiplugin.HomeDevice, it age
 	covered := func() (bool, string) { // a trust that covers the session or project and allows the command
 		command := detail
 		if tool != "Bash" {
-			command = "pwd" // an edit inside /work is judged like a plain command in it: a live trust that covers the session allows it
+			command = "pwd" // an edit inside the project is judged like a plain command in it: a live trust that covers the session allows it
 		}
 		r := request{ID: it.AskID, SessionID: it.SessionID, Project: it.Project, ToolName: tool, Command: command, Cwd: cwd}
 		m, why := w.s.st.use(d.ID, r, w.s.now())
@@ -228,7 +236,7 @@ func (w *watcher) agentApprove(ctx context.Context, d rubiplugin.HomeDevice, it 
 	if it.Host != "" {
 		preview["host"], preview["repository_path"], preview["operation"] = it.Host, plainText(it.Path, 200), plainText(it.Op, 30)
 	}
-	t := ticket{Device: d.ID, DeviceName: d.Name, AskID: it.AskID, AgentProject: it.Project, SessionID: it.SessionID, Cwd: agentRoot, Digest: hex.EncodeToString(sum[:])}
+	t := ticket{Device: d.ID, DeviceName: d.Name, AskID: it.AskID, AgentProject: it.Project, SessionID: it.SessionID, Cwd: it.root, Digest: hex.EncodeToString(sum[:])}
 	req := rubiplugin.Request{Kind: kind, Summary: "Claude (" + tool + "): " + oneLine(detail, 100), Preview: preview, Payload: t}
 	switch {
 	case always:
@@ -255,7 +263,7 @@ func (w *watcher) submitAgent(ctx context.Context, d rubiplugin.HomeDevice, it a
 	if out["status"] != "awaiting_approval" || id == "" {
 		return // no approval needed (the level was lowered): execute already answered
 	}
-	ev := map[string]any{"approval_id": id, "level": out["level"], "command": oneLine(detail, 300), "directory": agentRoot,
+	ev := map[string]any{"approval_id": id, "level": out["level"], "command": oneLine(detail, 300), "directory": it.root,
 		"computer": d.Name, "expires_at": life, "project": it.Project}
 	for _, k := range []string{"approval_url", "buttons", "after_sending_the_link"} {
 		if v, ok := out[k]; ok {

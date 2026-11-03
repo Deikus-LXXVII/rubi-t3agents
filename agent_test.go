@@ -13,35 +13,38 @@ import (
 	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
 )
 
-// fakeAgent plays the claude-agent operations of Rubi Home.
+// fakeAgent plays the t3-agent operations of Rubi Home.
 type fakeAgent struct {
 	mu        sync.Mutex
 	projects  []agentProject
 	sessions  map[string][]agentSess // by project id
 	rsessions map[string][]agentSess // by role id (the sessions of an isolated role)
-	items     []agentItem            // handed out by claude-agent.next, one list per call
+	items     []agentItem            // handed out by t3-agent.next, one list per call
 	decisions []agentDecision
 	calls     []fakeCall
-	slot      map[string]any // claude-agent.status "slot"
+	slot      map[string]any // t3-agent.status "slot"
 	queue     []map[string]any
 	startFn   func(args map[string]any) (map[string]any, error)
 	failOp    map[string]error
 	nextID    int
-	messages  []json.RawMessage // claude-agent.messages answer
-	login     any               // claude-agent.status "login" (default: signed in)
-	usage     any               // claude-agent.status "usage_today"
+	messages  []json.RawMessage // t3-agent.messages answer
+	login     any               // t3-agent.status "login" (default: signed in)
+	usage     any               // t3-agent.status "usage_today"
 	// A newer Rubi Home's status: per-project slots, limits and the Bots' modes (nil slots = the older single slot).
 	slots  []map[string]any
 	limits map[string]any
-	modes  map[string]any // claude-agent.status "usage"
-	roles  *fakeRoles     // the claude-agent.role.* operations (nil: a Rubi Home without roles)
-	ssh    *fakeSSH       // the claude-agent.ssh.* operations (nil: a Rubi Home without SSH targets)
+	modes  map[string]any // t3-agent.status "usage"
+	roles  *fakeRoles     // the t3-agent.role.* operations (nil: a Rubi Home without roles)
+	ssh    *fakeSSH       // the t3-agent.ssh.* operations (nil: a Rubi Home without SSH targets)
 }
 
 type fakeCall struct {
 	op   string
 	args map[string]any
 }
+
+// p1Dir is the real path of the fake project p1 on the computer; its VM mounts it at the same path.
+const p1Dir = "/home/alice/my-project"
 
 func newFakeAgent() *fakeAgent {
 	return &fakeAgent{projects: []agentProject{{ID: "p1", Dir: "/home/alice/my-project", VMState: "running"}},
@@ -81,7 +84,7 @@ func (a *fakeAgent) call(ctx context.Context, op string, args, out any) error {
 		}
 		return json.Unmarshal(b, out)
 	}
-	if strings.HasPrefix(op, "claude-agent.role.") {
+	if strings.HasPrefix(op, "t3-agent.role.") {
 		if a.roles == nil {
 			return errors.New(`Rubi Home doesn't do "` + op + `"`)
 		}
@@ -91,7 +94,7 @@ func (a *fakeAgent) call(ctx context.Context, op string, args, out any) error {
 		}
 		return reply(v)
 	}
-	if strings.HasPrefix(op, "claude-agent.ssh.") {
+	if strings.HasPrefix(op, "t3-agent.ssh.") {
 		if a.ssh == nil {
 			return errors.New(`Rubi Home doesn't do "` + op + `"`)
 		}
@@ -190,12 +193,12 @@ func agentFixture(t *testing.T) (*fakeHost, *sisters, *watcher) {
 
 func bashAsk(id, cmd, mode string) agentItem {
 	in, _ := json.Marshal(map[string]any{"command": cmd})
-	return agentItem{Type: "perm.ask", AskID: id, Project: "p1", SessionID: "s-1", Tool: "Bash", Input: in, Cwd: "/work", Mode: mode, ExpiresAt: time.Now().Add(time.Minute)}
+	return agentItem{Type: "perm.ask", AskID: id, Project: "p1", SessionID: "s-1", Tool: "Bash", Input: in, Cwd: "/home/alice/my-project", Mode: mode, ExpiresAt: time.Now().Add(time.Minute)}
 }
 
 func toolAsk(id, tool, mode string, in map[string]any) agentItem {
 	b, _ := json.Marshal(in)
-	return agentItem{Type: "perm.ask", AskID: id, Project: "p1", SessionID: "s-1", Tool: tool, Input: b, Cwd: "/work", Mode: mode, ExpiresAt: time.Now().Add(time.Minute)}
+	return agentItem{Type: "perm.ask", AskID: id, Project: "p1", SessionID: "s-1", Tool: tool, Input: b, Cwd: "/home/alice/my-project", Mode: mode, ExpiresAt: time.Now().Add(time.Minute)}
 }
 
 func lastSubmit(t *testing.T, f *fakeHost) rubiplugin.Request {
@@ -233,9 +236,9 @@ func TestAgentAlwaysAskInEveryMode(t *testing.T) {
 		{"tag", bashAsk("a", "git tag v1.0.0", "bypassPermissions")},
 		{"release", bashAsk("a", "gh release create v1", "bypassPermissions")},
 		{"publish", bashAsk("a", "npm publish", "bypassPermissions")},
-		{"edit rubi", toolAsk("a", "Edit", "bypassPermissions", map[string]any{"file_path": "/work/.rubi/x.json"})},
+		{"edit rubi", toolAsk("a", "Edit", "bypassPermissions", map[string]any{"file_path": "/home/alice/my-project/.rubi/x.json"})},
 		{"read rubi", toolAsk("a", "Read", "bypassPermissions", map[string]any{"file_path": ".rubi/claude/.credentials.json"})},
-		{"edit claude", toolAsk("a", "Write", "bypassPermissions", map[string]any{"file_path": "/work/sub/.claude/settings.json"})},
+		{"edit claude", toolAsk("a", "Write", "bypassPermissions", map[string]any{"file_path": "/home/alice/my-project/sub/.claude/settings.json"})},
 		{"write outside", toolAsk("a", "Write", "bypassPermissions", map[string]any{"file_path": "/etc/hosts"})},
 		{"write dotdot", toolAsk("a", "Write", "acceptEdits", map[string]any{"file_path": "../x"})},
 		{"webfetch other", toolAsk("a", "WebFetch", "bypassPermissions", map[string]any{"url": "https://example.com/"})},
@@ -264,12 +267,12 @@ func TestAgentBypassAllowsTheRest(t *testing.T) {
 	cases := []agentItem{
 		bashAsk("a", "ls -la && make test", "bypassPermissions"),
 		bashAsk("a", "go build ./... 2>&1 | tail -5", "bypassPermissions"),
-		bashAsk("a", "cat /dev/null > out.txt; cd /work/sub && git status", "bypassPermissions"),
+		bashAsk("a", "cat /dev/null > out.txt; cd /home/alice/my-project/sub && git status", "bypassPermissions"),
 		bashAsk("a", "curl -s https://registry.npmjs.org/left-pad", "bypassPermissions"),
 		bashAsk("a", "git tag -l", "bypassPermissions"),
-		toolAsk("a", "Write", "bypassPermissions", map[string]any{"file_path": "/work/src/a.go"}),
+		toolAsk("a", "Write", "bypassPermissions", map[string]any{"file_path": "/home/alice/my-project/src/a.go"}),
 		toolAsk("a", "Edit", "bypassPermissions", map[string]any{"file_path": "src/a.go"}),
-		toolAsk("a", "Read", "bypassPermissions", map[string]any{"file_path": "/work/.claude/skills/x.md"}),
+		toolAsk("a", "Read", "bypassPermissions", map[string]any{"file_path": "/home/alice/my-project/.claude/skills/x.md"}),
 		toolAsk("a", "WebFetch", "bypassPermissions", map[string]any{"url": "https://pypi.org/simple/x"}),
 		toolAsk("a", "mcp__rubi__rubi_reply", "default", map[string]any{"text": "hi"}),
 	}
@@ -382,7 +385,7 @@ func TestAgentTrustFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	ms := s.st.mandates(s.now())
-	if len(ms) != 1 || ms[0].Project != "p1" || ms[0].SessionID != "s-1" || ms[0].Cwd != agentRoot {
+	if len(ms) != 1 || ms[0].Project != "p1" || ms[0].SessionID != "s-1" || ms[0].Cwd != p1Dir {
 		t.Fatalf("mandates: %+v", ms)
 	}
 	n := len(f.submits)
@@ -403,7 +406,7 @@ func TestAgentTrustFlow(t *testing.T) {
 		t.Fatalf("decisions %v, asked %d (was %d)", got, len(f.submits), n)
 	}
 	// The mandate doesn't cover the hook path's sessions with the same id.
-	if m, _ := s.st.use("dev_mac", newRequestIn("s-1", "/work", "go test ./..."), s.now()); m != nil {
+	if m, _ := s.st.use("dev_mac", newRequestIn("s-1", "/home/alice/my-project", "go test ./..."), s.now()); m != nil {
 		t.Fatal("an agent mandate covered a hook request")
 	}
 }
@@ -414,7 +417,7 @@ func newRequestIn(session, cwd, command string) request {
 
 func TestAgentProjectTrustCoversOnlyItsProject(t *testing.T) {
 	f, s, w := agentFixture(t)
-	o, err := s.agentOffer("p1", "my-project", "Mac", "", false)
+	o, err := s.agentOffer("p1", p1Dir, "Mac", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,7 +550,6 @@ func TestAgentCapabilityIsProbedAndCached(t *testing.T) {
 // capability is not polled for them.
 func TestWatcherPollsAgentQuestions(t *testing.T) {
 	f, _, w := agentFixture(t)
-	f.next = func(ctx context.Context, _ string) (*request, error) { <-ctx.Done(); return nil, ctx.Err() }
 	f.agent.items = []agentItem{bashAsk("a1", "ls", "bypassPermissions")}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -678,7 +680,6 @@ func TestAgentQuestionIsPlainAndBounded(t *testing.T) {
 func TestWatcherRoutesNetAskWithItsRole(t *testing.T) {
 	f, s, w := agentFixture(t)
 	s.rc.set("dev_mac", &roleDev{at: time.Now(), roles: map[string]*role{"r_aaaaaaaa": {ID: "r_aaaaaaaa", Name: "reviewer"}}})
-	f.next = func(ctx context.Context, _ string) (*request, error) { <-ctx.Done(); return nil, ctx.Err() }
 	f.agent.items = []agentItem{{Type: "net.ask", AskID: "n1", Project: "p1", Role: "r_aaaaaaaa", SessionID: "rs-1", Host: "cdn.example.com", Op: "connect", ExpiresAt: time.Now().Add(time.Minute)}}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

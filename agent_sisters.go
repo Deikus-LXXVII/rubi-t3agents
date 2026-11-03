@@ -1,7 +1,7 @@
 package main
 
 // Sisters on the agent path. A Bot binds to an agent session (project id + session id) with the same strong
-// approval as before, sends it messages with claude-agent.send (they wait in Rubi Home's queue while the project's
+// approval as before, sends it messages with t3-agent.send (they wait in Rubi Home's queue while the project's
 // sessions are all running), asks how it stands, and starts new sessions. What the session says comes back
 // as runner events (routeAgent in agent.go). A binding with Project set is an agent binding; the tools pick the
 // path from it, so bindings made on the hook path keep working as they are.
@@ -17,7 +17,7 @@ import (
 	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
 )
 
-const agentBypassNote = "This session runs in bypassPermissions: Claude doesn't ask before most commands. Push, sudo, the network outside the allow-list, paths outside /work and edits of .rubi/.claude still need the user's approval."
+const agentBypassNote = "This session runs in bypassPermissions: Claude doesn't ask before most commands. Push, sudo, the network outside the allow-list, paths outside the project and edits of .rubi/.claude still need the user's approval."
 
 // agentProjectCovering finds a live project trust of the agent project, if the Bot is bound to a session of that
 // project, and counts a use.
@@ -56,7 +56,7 @@ func (s *sisters) bindAgent(ctx context.Context, h sisterHost, sister string, re
 	}
 	t := bindTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, SessionID: sess.ID, RepoKey: proj.Dir, Cwd: proj.Dir, Title: sess.Name, Project: proj.ID, Role: sess.Role}
 	if pt := s.agentProjectCovering(d.ID, sister, proj.ID); pt != nil && s.allow("bindpt|"+strings.ToLower(sister), bindsUnderTrustPerHour) {
-		h.Audit(auditMandateAll, map[string]any{"mandate": pt.ID, "project": proj.ID, "device": d.ID, "sister": sister, "action": "claude_code_bind", "session": sess.ID, "uses": pt.Uses})
+		h.Audit(auditMandateAll, map[string]any{"mandate": pt.ID, "project": proj.ID, "device": d.ID, "sister": sister, "action": "t3_bind", "session": sess.ID, "uses": pt.Uses})
 		res, err := s.executeBind(h, t)
 		if m, ok := res.(map[string]any); ok && err == nil {
 			m["approval"] = "none needed: " + pt.ID + ", the user's trust of the project " + proj.ID + " " + s.trustEnd(*pt)
@@ -82,9 +82,9 @@ func (s *sisters) bindAgent(ctx context.Context, h sisterHost, sister string, re
 
 func queueHint(position int) string {
 	if position > 0 {
-		return fmt.Sprintf("Waiting in Rubi Home's queue (position %d): the project already has its sessions running (or a limit is reached). It is delivered when a place frees up; its answer comes as a claude_reply event.", position)
+		return fmt.Sprintf("Waiting in Rubi Home's queue (position %d): the project already has its sessions running (or a limit is reached). It is delivered when a place frees up; its answer comes as a t3_reply event.", position)
 	}
-	return "Delivered to the session (it wakes by itself if idle). Its answer comes as a claude_reply event; delivery states come as claude_message events."
+	return "Delivered to the session (it wakes by itself if idle). Its answer comes as a t3_reply event; delivery states come as t3_message events."
 }
 
 func (s *sisters) sendAgent(ctx context.Context, h sisterHost, b binding, text, replyToAsk string) (any, error) {
@@ -135,7 +135,7 @@ func (s *sisters) statusAgent(ctx context.Context, h sisterHost, b binding) (any
 		}
 	}
 	if sess == nil {
-		return nil, errors.New("the bound session isn't there any more; bind to a live one (claude_code_sessions)")
+		return nil, errors.New("the bound session isn't there any more; bind to a live one (t3_sessions)")
 	}
 	running := st.slotList()
 	inSlot := false
@@ -192,7 +192,7 @@ func (s *sisters) statusAgent(ctx context.Context, h sisterHost, b binding) (any
 
 // ---- the list ----
 
-// agentSessionItems are the agent sessions for claude_code_sessions.
+// agentSessionItems are the agent sessions for t3_sessions.
 func (s *sisters) agentSessionItems(ctx context.Context, h sisterHost, repo string) ([]map[string]any, []string) {
 	bound := map[string]string{}
 	for _, b := range s.st.bindings() {
@@ -232,7 +232,7 @@ func (s *sisters) agentSessionItems(ctx context.Context, h sisterHost, repo stri
 
 // ---- start ----
 
-func (s *sisters) startAgent(ctx context.Context, h sisterHost, sister string, d rubiplugin.HomeDevice, in startIn, task string) (any, error) {
+func (s *sisters) startAgent(ctx context.Context, h sisterHost, sister string, d rubiplugin.HomeDevice, in startIn, task, briefID string) (any, error) {
 	projects, err := s.agentProjects(ctx, h, d.ID)
 	if err != nil {
 		return nil, err
@@ -249,10 +249,10 @@ func (s *sisters) startAgent(ctx context.Context, h sisterHost, sister string, d
 	if _, ok := modeRank[mode]; !ok {
 		return nil, errors.New("mode must be plan, default, acceptEdits or bypassPermissions")
 	}
-	t := startTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, Cwd: proj.Dir, Task: task, Project: proj.ID, Mode: mode}
+	t := startTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, Cwd: proj.Dir, Task: task, Project: proj.ID, Mode: mode, BriefID: briefID}
 	// Under a project trust a Bot starts sessions without asking, but never one that skips permission prompts.
 	if pt := s.agentProjectCovering(d.ID, sister, proj.ID); pt != nil && mode != "bypassPermissions" {
-		h.Audit(auditMandateAll, map[string]any{"mandate": pt.ID, "project": proj.ID, "device": d.ID, "sister": sister, "action": "claude_code_start", "uses": pt.Uses})
+		h.Audit(auditMandateAll, map[string]any{"mandate": pt.ID, "project": proj.ID, "device": d.ID, "sister": sister, "action": "t3_start", "uses": pt.Uses})
 		res, err := s.executeStart(ctx, h, t)
 		if m, ok := res.(map[string]any); ok && err == nil {
 			m["approval"] = "none needed: " + pt.ID + ", the user's trust of the project " + proj.ID + " " + s.trustEnd(*pt)
@@ -261,7 +261,10 @@ func (s *sisters) startAgent(ctx context.Context, h sisterHost, sister string, d
 	}
 	preview := map[string]any{"bot": sister, "computer": d.Name, "project": proj.Dir, "project_id": proj.ID, "mode": mode, "first_message_from_bot": task,
 		"what_it_does": fmt.Sprintf("Starts a NEW Claude session in the project %s on %s in permission mode %s. Its first message is the text under first_message_from_bot, from %s (a Bot; the text is not yours), labelled as the Bot's by Rubi Home. If a limit is reached (one session per project by default) it waits in the queue. Then %s is bound to the session.", proj.Dir, d.Name, mode, sister, sister),
-		"warning":      "Mode " + mode + ": " + map[bool]string{true: agentBypassNote, false: "Claude asks before commands as that mode says; push, sudo, the network outside the allow-list, paths outside /work and edits of .rubi/.claude always ask."}[mode == "bypassPermissions"]}
+		"warning":      "Mode " + mode + ": " + map[bool]string{true: agentBypassNote, false: "Claude asks before commands as that mode says; push, sudo, the network outside the allow-list, paths outside the project and edits of .rubi/.claude always ask."}[mode == "bypassPermissions"]}
+	if briefID != "" {
+		preview["brief_id"] = briefID
+	}
 	for _, b := range s.st.bindings() {
 		if sameBot(b.Sister, sister) {
 			preview["replaces"] = b.Title + " (" + b.SessionID + ")"
@@ -307,10 +310,13 @@ func (s *sisters) executeStartAgent(ctx context.Context, h sisterHost, t startTi
 			return nil, fmt.Errorf("no session was started: %v", err)
 		}
 		h.Audit("session_start_unknown", map[string]any{"sister": t.Sister, "device": t.Device, "project": t.Project})
-		return nil, fmt.Errorf("no answer from Rubi Home (%v): the session may have been started; look for it with claude_code_sessions before trying again", err)
+		return nil, fmt.Errorf("no answer from Rubi Home (%v): the session may have been started; look for it with t3_sessions before trying again", err)
 	}
 	h.Audit("session_started", map[string]any{"sister": t.Sister, "device": t.Device, "project": t.Project, "session": res.ID, "mode": t.Mode, "queued": res.Queued})
 	out := map[string]any{"started": !res.Queued, "queued": res.Queued, "project": t.Project, "permission_mode": t.Mode}
+	if t.BriefID != "" {
+		out["brief_id"] = t.BriefID
+	}
 	if t.Role != "" {
 		out["role"] = t.Role
 	}
@@ -320,7 +326,7 @@ func (s *sisters) executeStartAgent(ctx context.Context, h sisterHost, t startTi
 	if res.ID == "" {
 		out["bound"] = false
 		out["position"] = res.Position
-		out["next_step"] = fmt.Sprintf("A limit is reached (by default one session per project), so the new one waits in Rubi Home's queue (position %d). When it appears in claude_code_sessions, call claude_code_bind with its session_id: that is a new approval.", res.Position)
+		out["next_step"] = fmt.Sprintf("A limit is reached (by default one session per project), so the new one waits in Rubi Home's queue (position %d). When it appears in t3_sessions, call t3_bind with its session_id: that is a new approval.", res.Position)
 		return out, nil
 	}
 	out["session_id"] = res.ID
@@ -331,7 +337,7 @@ func (s *sisters) executeStartAgent(ctx context.Context, h sisterHost, t startTi
 			out["name_note"] = "the session was started but couldn't be named: " + err.Error()
 		}
 	}
-	bound, err := s.executeBind(h, bindTicket{Sister: t.Sister, Device: t.Device, DeviceName: t.DeviceName, SessionID: res.ID, Cwd: t.Cwd, RepoKey: t.Cwd, Project: t.Project, Role: t.Role})
+	bound, err := s.executeBind(h, bindTicket{Sister: t.Sister, Device: t.Device, DeviceName: t.DeviceName, SessionID: res.ID, Cwd: t.Cwd, RepoKey: t.Cwd, Project: t.Project, Role: t.Role, BriefID: t.BriefID})
 	if err != nil {
 		out["bound"] = false
 		out["note"] = "the session was started, but " + err.Error()
@@ -364,9 +370,9 @@ func (s *sisters) trustAgent(ctx context.Context, h sisterHost, b binding, in tr
 		return nil, err
 	}
 	t := trustTicket{Sister: b.Sister, Device: b.Device, DeviceName: b.DeviceName, Offer: o}
-	preview := map[string]any{"bot": b.Sister, "computer": firstNonEmpty(b.DeviceName, b.Device), "project": proj.Dir, "project_id": proj.ID, "project_root": agentRoot,
+	preview := map[string]any{"bot": b.Sister, "computer": firstNonEmpty(b.DeviceName, b.Device), "project": proj.Dir, "project_id": proj.ID, "project_root": o.Root,
 		"branches": o.Pattern, "until": s.untilText(o.Unlimited, o.Expires), "what_it_allows": s.trustMeaning(o, false)}
-	if old := s.st.projectTrustOf(b.Device, agentRoot, proj.ID, s.now()); old != nil {
+	if old := s.st.projectTrustOf(b.Device, o.Root, proj.ID, s.now()); old != nil {
 		preview["replaces"] = fmt.Sprintf("the trust %s (%s, %d commands used, granted %s)", old.ID, s.trustEnd(*old), old.Uses, ageText(old.Issued, s.now()))
 	}
 	key := optionTrustProject

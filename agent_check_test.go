@@ -9,7 +9,7 @@ import (
 func TestAgentAlwaysAskFailsClosed(t *testing.T) {
 	bash := func(c, cwd string) string {
 		b, _ := json.Marshal(map[string]any{"command": c})
-		return agentAlwaysAsk("Bash", b, cwd)
+		return agentAlwaysAsk("/work", "Bash", b, cwd)
 	}
 	for _, c := range []struct{ c, cwd string }{
 		{"cd ..; cd ..; cd ..; touch x", "/work/a"},
@@ -78,7 +78,7 @@ func TestAgentAlwaysAskFailsClosed(t *testing.T) {
 	}
 	tool := func(tn string, in map[string]any, cwd string) string {
 		b, _ := json.Marshal(in)
-		return agentAlwaysAsk(tn, b, cwd)
+		return agentAlwaysAsk("/work", tn, b, cwd)
 	}
 	for _, u := range []string{"https://api.anthropic.com\\@evil.com/", "https://evil.com\\.api.anthropic.com", "https://evil.com#@pypi.org",
 		"http://pypi.org:80@evil.com", " https://evil.com", "https://pypi.org.evil.com", "https://PYPI.org/", "https://pypi.org%2eevil.com",
@@ -117,7 +117,7 @@ func TestAgentAlwaysAskFailsClosed(t *testing.T) {
 			t.Errorf("%s did not ask", name)
 		}
 	}
-	if agentAlwaysAsk("Write", json.RawMessage(`[1`), "/work") == "" {
+	if agentAlwaysAsk("/work", "Write", json.RawMessage(`[1`), "/work") == "" {
 		t.Error("an unreadable input did not ask")
 	}
 	// Not asking is a decision too: plain work stays quiet.

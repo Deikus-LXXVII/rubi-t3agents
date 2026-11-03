@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -20,38 +23,31 @@ import (
 type fakeHost struct {
 	mu        sync.Mutex
 	devices   []rubiplugin.HomeDevice
-	next      func(ctx context.Context, device string) (*request, error)
 	submit    func(r rubiplugin.Request) (map[string]any, error)
-	states    []string // WaitApproval answers in turn; the last one repeats
+	states    []string  // WaitApproval answers in turn; the last one repeats
+	sessions  []session // played as T3 threads when no fakeAgent is set (derive_test.go)
 	submits   []rubiplugin.Request
-	decided   []decided
 	events    []map[string]any
-	decideFn  func(device string, a answer) error
-	sessions  []session       // claude-sessions.list answers
-	listHook  map[string]any  // "hook" in the claude-sessions.list answer (newer Rubi Homes)
-	listHang  bool            // claude-sessions.list never answers (until ctx ends)
-	hangOn    map[string]bool // claude-sessions.list never answers on these computers
-	sendExtra map[string]any  // merged into the claude-sessions.send answer (newer Rubi Home fields)
-	outs      []outMsg        // claude-sessions.next answers, one per call
-	ops       []string        // every op called
-	sent      []map[string]any
+	ops       []string // every op called
 	audits    []string
 	auditLog  []map[string]any
 	state     json.RawMessage
 	emitToErr error // EmitTo fails (no Bot of that name with a webhook)
-	oldHome   bool  // Rubi Home doesn't know claude-sessions.bound
 	logs      []string
-	hangBound bool // claude-sessions.bound never answers (until ctx ends)
-	bound     []map[string]any
-	createFn  func(ctx context.Context, args map[string]any) (map[string]any, error) // claude-sessions.create (nil: an old Rubi Home)
-	creates   []map[string]any
 	saveErr   error        // SaveState fails
-	listCut   bool         // claude-sessions.list says truncated
-	listCalls int          // claude-sessions.list calls
-	listArch  []bool       // include_archived of each claude-sessions.list call
-	agent     *fakeAgent   // the claude-agent operations (nil: a Rubi Home without the capability)
-	setup     *fakeSetup   // the agent-setup operations (nil: a Rubi Home without the capability)
+	agent     *fakeAgent   // the t3-agent operations (nil: a Rubi Home without the capability)
+	setup     *fakeSetup   // the t3-setup operations (nil: a Rubi Home without the capability)
 	library   *fakeLibrary // the host method library.get (nil: none)
+	derived   *fakeAgent   // the t3-agent operations played from sessions (derive_test.go)
+}
+
+// answer is what the fake Rubi Home records of a desktop-era claude.decide call (kept for the fake's helpers).
+type answer struct {
+	ID        string `json:"id"`
+	SessionID string `json:"session_id"`
+	Digest    string `json:"digest"`
+	Behavior  string `json:"behavior"`
+	Message   string `json:"message,omitempty"`
 }
 
 type decided struct {
@@ -79,113 +75,22 @@ func (f *fakeHost) HomeCall(ctx context.Context, device, op string, args, out an
 	f.ops = append(f.ops, op)
 	f.mu.Unlock()
 	switch op {
-	case "claude.next":
-		r, err := f.next(ctx, device)
-		if err != nil {
-			return err
-		}
-		b, _ := json.Marshal(map[string]any{"request": r})
-		return json.Unmarshal(b, out)
-	case "claude.decide":
-		a := args.(answer)
-		f.mu.Lock()
-		f.decided = append(f.decided, decided{device, a})
-		fn := f.decideFn
-		f.mu.Unlock()
-		if fn != nil {
-			return fn(device, a)
-		}
-		return nil
-	case "claude-sessions.next": // what a session said, else wait a little like the helper's long poll
-		f.mu.Lock()
-		if len(f.outs) > 0 {
-			o := f.outs[0]
-			f.outs = f.outs[1:]
-			f.mu.Unlock()
-			b, _ := json.Marshal(map[string]any{"out": o})
-			return json.Unmarshal(b, out)
-		}
-		f.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(20 * time.Millisecond):
-		}
-		return json.Unmarshal([]byte(`{"out":null}`), out)
-	case "claude-sessions.list":
-		if f.listHang || f.hangOn[device] {
-			<-ctx.Done()
-			return errors.New("Rubi Home didn't answer")
-		}
-		f.mu.Lock()
-		f.listCalls++
-		if m, ok := args.(map[string]any); ok {
-			arch, _ := m["include_archived"].(bool)
-			f.listArch = append(f.listArch, arch)
-		}
-		ans := map[string]any{"sessions": f.sessions}
-		if f.listCut {
-			ans["truncated"] = true
-		}
-		if f.listHook != nil {
-			ans["hook"] = f.listHook
-		}
-		b, _ := json.Marshal(ans)
-		f.mu.Unlock()
-		return json.Unmarshal(b, out)
-	case "claude-sessions.bound":
-		f.mu.Lock()
-		hang := f.hangBound
-		f.mu.Unlock()
-		if hang {
-			<-ctx.Done()
-			return ctx.Err()
-		}
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		if f.oldHome {
-			return errors.New(`Rubi Home doesn't do "claude-sessions.bound"`)
-		}
-		f.bound = append(f.bound, args.(map[string]any))
-		return nil
-	case "claude-start.create":
-		f.mu.Lock()
-		fn := f.createFn
-		f.creates = append(f.creates, args.(map[string]any))
-		f.mu.Unlock()
-		if fn == nil {
-			return errors.New(`Rubi Home doesn't do "claude-start.create"`)
-		}
-		ans, err := fn(ctx, args.(map[string]any))
-		if err != nil {
-			return err
-		}
-		b, _ := json.Marshal(ans)
-		return json.Unmarshal(b, out)
-	case "claude-sessions.send":
-		m := args.(map[string]any)
-		f.mu.Lock()
-		f.sent = append(f.sent, m)
-		f.mu.Unlock()
-		f.mu.Lock()
-		ans := map[string]any{"queued": true, "id": "msg_1", "waiting": 1}
-		for k, v := range f.sendExtra {
-			ans[k] = v
-		}
-		f.mu.Unlock()
-		b, _ := json.Marshal(ans)
-		return json.Unmarshal(b, out)
 	}
-	if f.setup != nil && strings.HasPrefix(op, "agent-setup.") {
+	if f.setup != nil && strings.HasPrefix(op, "t3-setup.") {
 		return f.setup.call(op, args, out)
 	}
-	if strings.HasPrefix(op, "agent-setup.") {
+	if strings.HasPrefix(op, "t3-setup.") {
 		return errors.New(`Rubi Home doesn't do "` + op + `"`)
 	}
-	if f.agent != nil && strings.HasPrefix(op, "claude-agent.") {
+	if f.agent != nil && strings.HasPrefix(op, "t3-agent.") {
 		return f.agent.call(ctx, op, args, out)
 	}
-	if strings.HasPrefix(op, "claude-agent.") {
+	if strings.HasPrefix(op, "t3-agent.") {
+		if a := f.derivedAgent(); a != nil {
+			return a.call(ctx, op, args, out)
+		}
+	}
+	if strings.HasPrefix(op, "t3-agent.") {
 		return errors.New(`Rubi Home doesn't do "` + op + `"`)
 	}
 	return errors.New("unexpected op " + op)
@@ -273,191 +178,27 @@ func newRequest(command string) request {
 
 var mac = rubiplugin.HomeDevice{ID: "dev_mac", Name: "Mac"}
 
-func TestApprovedCommandIsAllowedOnlyByExecute(t *testing.T) {
-	f := &fakeHost{states: []string{"pending", "executing", "executed"}}
-	r := newRequest("rm -rf build")
-	newWatcher(f, nil).handle(context.Background(), mac, r)
-
-	if len(f.submits) != 1 {
-		t.Fatalf("submits: %v", f.submits)
-	}
-	s := f.submits[0]
-	p := s.Preview.(map[string]any)
-	if s.Kind != kindRun || p["command"] != "rm -rf build" || p["directory"] != r.Cwd || p["computer"] != "Mac" ||
-		p["session"] != "sess-1" || p["tool"] != "Bash" || !strings.Contains(s.Summary, "rm -rf build") {
-		t.Fatalf("submit: %+v", s)
-	}
-	if len(f.decided) != 0 {
-		t.Fatalf("the watcher answered by itself: %v", f.decided)
-	}
-	if len(f.events) != 1 || f.events[0]["_type"] != eventNeeded || f.events[0]["approval_url"] != "https://rubi-panel.com/#a=apr_1" ||
-		f.events[0]["command"] != "rm -rf build" {
-		t.Fatalf("events: %v", f.events)
-	}
-
-	// Rubi runs execute with the payload it was given: that alone allows, bound to this request.
-	payload, _ := json.Marshal(s.Payload)
-	if _, err := allow(context.Background(), f, payload); err != nil {
-		t.Fatal(err)
-	}
-	want := decided{"dev_mac", answer{ID: r.ID, SessionID: r.SessionID, Digest: r.Digest, Behavior: "allow"}}
-	if len(f.decided) != 1 || f.decided[0] != want {
-		t.Fatalf("decided: %+v", f.decided)
-	}
-}
-
-func TestEndingsDeny(t *testing.T) {
-	for state, msg := range map[string]string{"denied": msgDenied, "cancelled": msgCancelled, "expired": msgExpired, "weird": "weird"} {
-		f := &fakeHost{states: []string{"pending", state}}
-		r := newRequest("curl https://example.com")
-		newWatcher(f, nil).handle(context.Background(), mac, r)
-		if len(f.decided) != 1 {
-			t.Fatalf("%s: decided %v", state, f.decided)
-		}
-		d := f.decided[0]
-		if d.Behavior != "deny" || !strings.Contains(d.Message, msg) || d.ID != r.ID || d.SessionID != r.SessionID ||
-			d.Digest != r.Digest || d.device != "dev_mac" {
-			t.Fatalf("%s: %+v", state, d)
-		}
-	}
-}
-
-func TestSafeCommandsUseTheQuickAction(t *testing.T) {
-	f := &fakeHost{states: []string{"executed"}}
-	newWatcher(f, nil).handle(context.Background(), mac, newRequest("git status"))
-	if f.submits[0].Kind != kindSafe {
-		t.Fatalf("kind %s", f.submits[0].Kind)
-	}
-}
-
-func TestSubmitFailureDeniesWithTheReason(t *testing.T) {
-	f := &fakeHost{submit: func(rubiplugin.Request) (map[string]any, error) {
-		return nil, errors.New("hourly limit for approved actions reached")
-	}}
-	newWatcher(f, nil).handle(context.Background(), mac, newRequest("make test"))
-	if len(f.decided) != 1 || f.decided[0].Behavior != "deny" || !strings.Contains(f.decided[0].Message, "hourly limit") {
-		t.Fatalf("decided: %+v", f.decided)
-	}
-}
-
-func TestNoApprovalNeeded(t *testing.T) {
-	// At level none Rubi has already called execute (which allowed); the watcher adds nothing.
-	f := &fakeHost{submit: func(rubiplugin.Request) (map[string]any, error) { return map[string]any{"allowed": true}, nil }}
-	newWatcher(f, nil).handle(context.Background(), mac, newRequest("ls"))
-	if len(f.decided) != 0 || len(f.events) != 0 {
-		t.Fatalf("decided %v events %v", f.decided, f.events)
-	}
-}
-
-func TestRequestThatDoesntCheckOutIsDenied(t *testing.T) {
-	bad := map[string]func(*request){
-		"digest":  func(r *request) { r.Digest = strings.Repeat("0", 64) },
-		"command": func(r *request) { r.Command = "ls" },
-		"tool":    func(r *request) { r.ToolName = "Write" },
-		"not json": func(r *request) {
-			r.ToolInput = "x"
-			s := sha256.Sum256([]byte("x"))
-			r.Digest = hex.EncodeToString(s[:])
-		},
-		"empty id":     func(r *request) { r.ID = "" },
-		"tool swapped": func(r *request) { r.ToolInput = `{"command":"rm -rf /"}` },
-	}
-	for name, mutate := range bad {
-		f := &fakeHost{}
-		r := newRequest("cat x")
-		mutate(&r)
-		newWatcher(f, nil).handle(context.Background(), mac, r)
-		if len(f.submits) != 0 {
-			t.Errorf("%s: asked about it", name)
-		}
-		if len(f.decided) != 1 || f.decided[0].Behavior != "deny" || f.decided[0].Message != msgMalformed {
-			t.Errorf("%s: decided %+v", name, f.decided)
-		}
-	}
-}
-
-func TestExecuteFailsWhenClaudeStoppedWaiting(t *testing.T) {
-	f := &fakeHost{decideFn: func(string, answer) error { return errors.New("unknown or expired request") }}
-	payload, _ := json.Marshal(ticket{Device: "dev_mac", ID: "cc_1", SessionID: "s", Digest: "d"})
-	if _, err := allow(context.Background(), f, payload); err == nil || !strings.Contains(err.Error(), "no longer waiting") {
-		t.Fatalf("err %v", err)
-	}
-	if _, err := allow(context.Background(), f, json.RawMessage(`{}`)); err == nil {
-		t.Fatal("empty payload accepted")
-	}
-}
-
-func TestExpiredRequestIsLeftToTheHelper(t *testing.T) {
-	f := &fakeHost{states: []string{"pending"}}
-	r := newRequest("make")
-	r.ExpiresAt = time.Now().Add(-time.Second)
-	newWatcher(f, nil).handle(context.Background(), mac, r)
-	if len(f.decided) != 0 {
-		t.Fatalf("decided %v", f.decided)
-	}
-}
-
-// TestPollsEveryComputerAndStops: each paired computer is polled, its requests handled, and everything
-// ends when the plugin stops. A computer that is no longer paired isn't polled again.
-func TestPollsEveryComputerAndStops(t *testing.T) {
-	gone := rubiplugin.HomeDevice{ID: "dev_old", Name: "Old Mac"}
-	var mu sync.Mutex
-	served, goneCalls := 0, 0
-	f := &fakeHost{devices: []rubiplugin.HomeDevice{mac, gone}, states: []string{"denied"}}
-	f.next = func(ctx context.Context, device string) (*request, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		if device == "dev_old" {
-			goneCalls++
-			return nil, &rubiplugin.Error{Code: rubiplugin.CodeHomeNotPaired, Message: "not paired"}
-		}
-		if served == 0 {
-			served++
-			r := newRequest("rm x")
-			return &r, nil
-		}
-		mu.Unlock()
-		<-ctx.Done()
-		mu.Lock()
-		return nil, ctx.Err()
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	w := newWatcher(f, nil)
-	go func() { defer close(done); w.run(ctx) }()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		f.mu.Lock()
-		n := len(f.decided)
-		f.mu.Unlock()
-		if n == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the request was never answered")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the watcher didn't stop")
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if goneCalls != 1 {
-		t.Fatalf("polled an unpaired computer %d times", goneCalls)
-	}
-	if f.decided[0].device != "dev_mac" || f.decided[0].Message != msgDenied {
-		t.Fatalf("decided %+v", f.decided)
-	}
-}
-
 func TestManifest(t *testing.T) {
 	m := manifest()
-	if m.ID != "claude-code" || len(m.Egress) != 0 || len(m.Secrets) != 0 || len(m.Home) != 5 || m.Home[0] != "claude" || m.Home[1] != "claude-sessions" || m.Home[2] != "claude-start" || m.Home[3] != "claude-agent" || m.Home[4] != "agent-setup" || m.Hooks {
-		t.Fatalf("permissions: %+v", m)
+	if m.ID != "t3agents" || m.Name != "T3 Agents" || len(m.Egress) != 0 || len(m.Secrets) != 0 || len(m.Home) != 2 || m.Home[0] != "t3-agent" || m.Home[1] != "t3-setup" || m.Hooks {
+		t.Fatalf("identity or permissions: %+v", m)
+	}
+	if m.Entry != "t3agents" || m.Source != "https://github.com/Deikus-LXXVII/rubi-t3agents" {
+		t.Fatalf("entry or source: %q %q", m.Entry, m.Source)
+	}
+	// The desktop path is gone: no desktop capability, no desktop action.
+	for _, c := range m.Home {
+		if c == "claude" || c == "claude-sessions" || c == "claude-start" {
+			t.Errorf("manifest still asks for the desktop capability %q", c)
+		}
+	}
+	for _, a := range m.Actions {
+		if !strings.HasPrefix(a.Kind, "t3agents.") {
+			t.Errorf("action kind %q is not under the plugin's id", a.Kind)
+		}
+	}
+	if opts := func() []rubiplugin.Option { a, _ := m.Action(kindRun); return a.Options }(); len(opts) != 2 || opts[0].Key != optionAllow || opts[1].Key != optionTrust {
+		t.Errorf("a run approval offers only one command or the 2-hour trust: %+v", opts)
 	}
 	run, _ := m.Action(kindRun)
 	safe, _ := m.Action(kindSafe)
@@ -472,6 +213,68 @@ func TestManifest(t *testing.T) {
 	for _, typ := range []string{eventBound, eventReply, eventAsk, eventMessage} {
 		if _, ok := m.Event(typ); !ok {
 			t.Errorf("event %s isn't declared in the manifest", typ)
+		}
+	}
+}
+
+// The tool names are the t3_ family and no tool keeps the old prefix.
+func TestToolNames(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"t3_start", "t3_send", "t3_status", "t3_sessions", "t3_bind", "t3_unbind", "t3_fork", "t3_mode", "t3_rename", "t3_mandates", "t3_trust_project", "t3_project_add"} {
+		if !strings.Contains(string(src), `"`+name+`"`) {
+			t.Errorf("tool %s is not registered", name)
+		}
+	}
+	rs, err := os.ReadFile("roles_tools.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rs), `"t3_role_create"`) || !strings.Contains(string(rs), `"t3_role_update"`) {
+		t.Error("the role tools are not t3_role_*")
+	}
+	all, _ := filepath.Glob("*.go")
+	for _, f := range all {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, _ := os.ReadFile(f)
+		if strings.Contains(string(b), "claude_code_") {
+			t.Errorf("%s still names a claude_code_ tool", f)
+		}
+	}
+}
+
+// The plugin talks to Rubi Home only in the t3-agent and t3-setup families, and the watcher polls only the
+// t3-agent queue.
+func TestWatcherCallsOnlyT3Ops(t *testing.T) {
+	f, s, w := agentFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { w.run(ctx); close(done) }()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		f.mu.Lock()
+		got := slices.Contains(f.ops, opAgentNext)
+		f.mu.Unlock()
+		if got {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	_ = s
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !slices.Contains(f.ops, opAgentNext) {
+		t.Fatalf("the t3-agent queue was never polled: %v", f.ops)
+	}
+	for _, op := range f.ops {
+		if !strings.HasPrefix(op, "t3-agent.") && !strings.HasPrefix(op, "t3-setup.") {
+			t.Errorf("a call to %q, which is not a t3 op", op)
 		}
 	}
 }

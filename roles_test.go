@@ -42,7 +42,7 @@ func trustBot(t *testing.T, s *sisters, bot, project string) {
 	t.Helper()
 	s.st.mu.Lock()
 	defer s.st.mu.Unlock()
-	s.st.st.Projects = append(s.st.st.Projects, projectTrust{ID: "pt_" + bot + project, Device: "dev_mac", Root: "/work", Sister: bot, Project: project,
+	s.st.st.Projects = append(s.st.st.Projects, projectTrust{ID: "pt_" + bot + project, Device: "dev_mac", Root: "/home/alice/my-project", Sister: bot, Project: project,
 		BranchPattern: "agent/*", Issued: time.Now(), Unlimited: true})
 }
 
@@ -220,7 +220,7 @@ func TestCreateWithoutTrustAsksAndRunsOnce(t *testing.T) {
 	trustBot(t, s, "bot-b", "p1")
 	trustBot(t, s, botA, "p2")
 	s.st.mu.Lock()
-	s.st.st.Projects = append(s.st.st.Projects, projectTrust{ID: "pt_run", Device: "dev_mac", Root: "/work", Project: "p1", Unlimited: true})
+	s.st.st.Projects = append(s.st.st.Projects, projectTrust{ID: "pt_run", Device: "dev_mac", Root: "/home/alice/my-project", Project: "p1", Unlimited: true})
 	s.st.mu.Unlock()
 	m := asMap(t)(s.roleCreateTool(context.Background(), f, roleCreateIn{roleWho: who(botA), Project: "p1", Name: "design"}))
 	if status(m) != "needs_approval" || m["approval_id"] != "apr_1" || m["link"] != "https://rubi-panel.com/#a=apr_1" {

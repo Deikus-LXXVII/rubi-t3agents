@@ -1,6 +1,6 @@
 package main
 
-// claude_code_role_start: a session in a role's own VM. The approval rule is claude_code_start's: one strong
+// t3_role_start: a session in a role's own VM. The approval rule is t3_start's: one strong
 // approval, or none inside a project the user trusts for this Bot (never for a mode that skips permission prompts).
 
 import (
@@ -22,9 +22,13 @@ func (s *sisters) roleStartTool(ctx context.Context, h sisterHost, in roleStartI
 	case task == "":
 		return nil, errors.New("prompt is empty")
 	case len([]rune(task)) > maxStartTask:
-		return nil, fmt.Errorf("prompt is longer than %d characters: start the session with a short prompt and send the details with claude_code_send", maxStartTask)
+		return nil, fmt.Errorf("prompt is longer than %d characters: start the session with a short prompt and send the details with t3_send", maxStartTask)
 	}
 	if err := checkStartText(task); err != nil {
+		return nil, err
+	}
+	task, briefID, err := composeStart(task, in.Brief)
+	if err != nil {
 		return nil, err
 	}
 	name := ""
@@ -55,12 +59,12 @@ func (s *sisters) roleStartTool(ctx context.Context, h sisterHost, in roleStartI
 		return nil, fmt.Errorf("at most %d session starts per hour in all", startsGlobal)
 	}
 	t := startTicket{Sister: c.Bot, Device: c.Dev.ID, DeviceName: c.Dev.Name, Cwd: proj.Dir, Task: task, Project: proj.ID, Mode: mode,
-		Role: r.ID, RoleName: r.Name, RoleVersion: r.Version, Name: name}
+		Role: r.ID, RoleName: r.Name, RoleVersion: r.Version, Name: name, BriefID: briefID}
 	// Under a project trust held by this Bot a session starts without asking, but never one that skips prompts.
 	if pt := s.botTrust(c.Dev.ID, c.Bot, proj.ID); pt != nil && mode != "bypassPermissions" {
 		used := s.st.useProject(c.Dev.ID, s.now(), func(p projectTrust) bool { return p.ID == pt.ID })
 		if used != nil {
-			h.Audit(auditMandateAll, map[string]any{"mandate": used.ID, "project": proj.ID, "device": c.Dev.ID, "sister": c.Bot, "action": "claude_code_role_start", "role": r.ID, "uses": used.Uses})
+			h.Audit(auditMandateAll, map[string]any{"mandate": used.ID, "project": proj.ID, "device": c.Dev.ID, "sister": c.Bot, "action": "t3_role_start", "role": r.ID, "uses": used.Uses})
 			res, err := s.executeStart(ctx, h, t)
 			if m, ok := res.(map[string]any); ok && err == nil {
 				m["approval"] = "none needed: " + used.ID + ", the user's trust of the project " + proj.ID + " " + s.trustEnd(*used)
@@ -72,7 +76,10 @@ func (s *sisters) roleStartTool(ctx context.Context, h sisterHost, in roleStartI
 		"first_message_from_bot": task,
 		"what_it_does": fmt.Sprintf("Starts a NEW Claude session in the role %s of the project %s on %s, in its own VM with only that role's skills, tools and hosts, in permission mode %s. Its first message is the text under first_message_from_bot, from %s (a Bot; the text is not yours), labelled as the Bot's by Rubi Home. If a limit is reached it waits in the queue. Then %s is bound to the session.",
 			oneLine(r.Name, 40), proj.Dir, c.Dev.Name, mode, c.Bot, c.Bot),
-		"warning": "Mode " + mode + ": " + map[bool]string{true: agentBypassNote, false: "Claude asks before commands as that mode says; push, sudo, the network outside the allow-list, paths outside /work and edits of .rubi/.claude always ask."}[mode == "bypassPermissions"]}
+		"warning": "Mode " + mode + ": " + map[bool]string{true: agentBypassNote, false: "Claude asks before commands as that mode says; push, sudo, the network outside the allow-list, paths outside the project and edits of .rubi/.claude always ask."}[mode == "bypassPermissions"]}
+	if briefID != "" {
+		preview["brief_id"] = briefID
+	}
 	for _, b := range s.st.bindings() {
 		if sameBot(b.Sister, c.Bot) {
 			preview["replaces"] = b.Title + " (" + b.SessionID + ")"

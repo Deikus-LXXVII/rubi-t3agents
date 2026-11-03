@@ -1,8 +1,8 @@
 package main
 
-// The Rubi Home agent path (capability "claude-agent"): Claude runs through the Agent SDK in a project VM on the
+// The Rubi Home agent path (capability "t3-agent"): Claude runs through the Agent SDK in a project VM on the
 // user's computer and Rubi Home relays it. This file holds the contract types, the capability probe, the
-// listing of projects and sessions, the poll of claude-agent.next and the routing of the runner's events to
+// listing of projects and sessions, the poll of t3-agent.next and the routing of the runner's events to
 // Bots. Permissions are in agent_perm.go, the sister tools in agent_sisters.go. The old hook path
 // (watch.go, binding.go ...) is untouched and still used by a computer that doesn't report the capability.
 
@@ -15,23 +15,22 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
 )
 
 const (
-	opAgentProjects = "claude-agent.projects"
-	opAgentSessions = "claude-agent.sessions"
-	opAgentStart    = "claude-agent.start"
-	opAgentSend     = "claude-agent.send"
-	opAgentRename   = "claude-agent.rename"
-	opAgentFork     = "claude-agent.fork"
-	opAgentMode     = "claude-agent.mode"
-	opAgentNext     = "claude-agent.next"
-	opAgentDecide   = "claude-agent.decide"
-	opAgentStatus   = "claude-agent.status"
-
-	agentRoot = "/work" // the project's directory inside its VM
+	opAgentProjects = "t3-agent.projects"
+	opAgentSessions = "t3-agent.sessions"
+	opAgentStart    = "t3-agent.start"
+	opAgentSend     = "t3-agent.send"
+	opAgentRename   = "t3-agent.rename"
+	opAgentFork     = "t3-agent.fork"
+	opAgentMode     = "t3-agent.mode"
+	opAgentNext     = "t3-agent.next"
+	opAgentDecide   = "t3-agent.decide"
+	opAgentStatus   = "t3-agent.status"
 
 	capYes       = 5 * time.Minute // how long "has the capability" is remembered
 	capNo        = time.Minute     // and "has not"
@@ -56,7 +55,7 @@ type capEntry struct {
 	at time.Time
 }
 
-// agentCapable says whether the computer's Rubi Home has the claude-agent capability: claude-agent.status
+// agentCapable says whether the computer's Rubi Home has the t3-agent capability: t3-agent.status
 // answers. The answer is remembered for a few minutes.
 func (s *sisters) agentCapable(ctx context.Context, h homeCaller, device string) bool {
 	return s.capProbe(ctx, h, device, device, opAgentStatus)
@@ -94,13 +93,6 @@ func (s *sisters) capProbe(ctx context.Context, h homeCaller, device, key, op st
 	return err == nil
 }
 
-// agentKnown says whether the computer is known (not probed now) to have the capability.
-func (s *sisters) agentKnown(device string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.caps[device].ok
-}
-
 // ---- projects and sessions ----
 
 type agentProject struct {
@@ -126,7 +118,7 @@ func normRole(project, role string) string {
 	return role
 }
 
-// withRole adds the role to the arguments of a claude-agent operation when the session is in an isolated role.
+// withRole adds the role to the arguments of a t3-agent operation when the session is in an isolated role.
 func withRole(args map[string]any, role string) map[string]any {
 	if role != "" {
 		args["role"] = role
@@ -137,7 +129,61 @@ func withRole(args map[string]any, role string) map[string]any {
 // isolated says whether the row is about a stored (isolated) role.
 func (p agentProject) isolated() bool { return normRole(p.ID, p.Role) != "" }
 
-// agentSess is one agent session (claude-agent.sessions). Name is the runner's (renameSession); the Rubi alias
+// rootEntry is a project's real path as t3-agent.projects reported it.
+type rootEntry struct {
+	dir string
+	at  time.Time
+}
+
+const rootReuse = time.Minute
+
+// projectRoot is the project's real path on the computer (the role VMs mount it at that same path), from
+// t3-agent.projects; "" when Rubi Home doesn't list the project or the path isn't a clean absolute path. The answer is
+// reused for a minute, so a stream of questions is not a stream of list calls.
+func (s *sisters) projectRoot(ctx context.Context, h sisterHost, device, project string) string {
+	if project == "" {
+		return ""
+	}
+	key := device + "|" + project
+	s.mu.Lock()
+	e, ok := s.roots[key]
+	s.mu.Unlock()
+	if ok && s.now().Sub(e.at) < rootReuse {
+		return e.dir
+	}
+	dir := ""
+	if ps, err := s.agentProjects(ctx, h, device); err == nil {
+		for _, p := range ps {
+			if p.ID == project && cleanRoot(p.Dir) {
+				dir = p.Dir
+				break
+			}
+		}
+	} else if ok {
+		return e.dir // a failed list keeps what was known
+	}
+	s.mu.Lock()
+	if s.roots == nil {
+		s.roots = map[string]rootEntry{}
+	}
+	s.roots[key] = rootEntry{dir, s.now()}
+	s.mu.Unlock()
+	return dir
+}
+
+// cachedRoot is the last known path of a project ("" when none), for texts that don't need a fresh one.
+func (s *sisters) cachedRoot(device, project string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.roots[device+"|"+project].dir
+}
+
+// cleanRoot says whether dir is a usable project path: absolute, clean, without control characters (spaces are fine).
+func cleanRoot(dir string) bool {
+	return path.IsAbs(dir) && path.Clean(dir) == dir && dir != "/" && !strings.ContainsFunc(dir, unicode.IsControl)
+}
+
+// agentSess is one agent session (t3-agent.sessions). Name is the runner's (renameSession); the Rubi alias
 // is kept in the plugin's store.
 type agentSess struct {
 	ID           string    `json:"id"`
@@ -325,7 +371,7 @@ func (s *sisters) resolveAgent(ctx context.Context, h sisterHost, device, projec
 
 // ---- the poll ----
 
-// agentItem is one entry of claude-agent.next: a question for the plugin (perm.ask, cred.ask) or an event.
+// agentItem is one entry of t3-agent.next: a question for the plugin (perm.ask, cred.ask) or an event.
 type agentItem struct {
 	Type      string          `json:"type"` // perm.ask, cred.ask, event
 	AskID     string          `json:"ask_id,omitempty"`
@@ -348,6 +394,7 @@ type agentItem struct {
 	Event  json.RawMessage `json:"event,omitempty"`
 	detail string          // set by handleAsk: what the approval shows for a question without a tool input
 	extra  map[string]any  // set by handleAsk: more facts for the approval's preview (an ssh.ask's target and user)
+	root   string          // set by handleAsk: the project's real path
 	// event: Kind is the runner's (assistant, tool, result, sister_reply, sister_ask, message, status, error ...)
 	Kind      string    `json:"kind,omitempty"`
 	ID        string    `json:"id,omitempty"`
@@ -458,8 +505,14 @@ func (s *sisters) routeAgent(ctx context.Context, h sisterHost, d rubiplugin.Hom
 			return
 		}
 		h.Audit("reply_forwarded", map[string]any{"sister": target.Sister, "session": it.SessionID, "project": it.Project, "chars": len([]rune(it.Text))})
-		if _, err := h.EmitTo(target.Sister, eventReply, map[string]any{"session_id": it.SessionID, "project": it.Project, "in_reply_to": it.InReplyTo,
-			"text": it.Text, "truncated": it.Truncated, "computer": d.Name, "role": target.Role}); err != nil {
+		data := map[string]any{"session_id": it.SessionID, "project": it.Project, "in_reply_to": it.InReplyTo,
+			"text": it.Text, "truncated": it.Truncated, "computer": d.Name, "role": target.Role}
+		// A report in the fixed shape (STATUS / COMMIT / EVIDENCE) comes as fields too; the text stays as it is. A
+		// cut text may have lost the end of the report, so it is never parsed.
+		if rep, ok := parseReport(it.Text); ok && !it.Truncated {
+			rep.addTo(data)
+		}
+		if _, err := h.EmitTo(target.Sister, eventReply, data); err != nil {
 			h.Logf("reply to %s: %v", target.Sister, err)
 		}
 	case "message":
@@ -490,8 +543,8 @@ func (s *sisters) routeAgent(ctx context.Context, h sisterHost, d rubiplugin.Hom
 		s.mu.Unlock()
 		h.Audit("ask_forwarded", map[string]any{"sister": target.Sister, "session": it.SessionID, "ask": id, "kind": it.AskKind})
 		data := map[string]any{"ask_id": id, "kind": it.AskKind, "text": it.Text, "session_id": it.SessionID, "project": it.Project,
-			"directory": agentRoot, "computer": d.Name, "role": "main", "agent_role": target.Role, "title": "",
-			"next_step": "Answer briefly with claude_code_send {sister, bind_code, text, reply_to_ask: ask_id}. Small research or audit only."}
+			"directory": s.cachedRoot(d.ID, it.Project), "computer": d.Name, "role": "main", "agent_role": target.Role, "title": "",
+			"next_step": "Answer briefly with t3_send {sister, bind_code, text, reply_to_ask: ask_id}. Small research or audit only."}
 		if _, err := h.EmitTo(target.Sister, eventAsk, data); err != nil {
 			h.Logf("ask to %s: %v", target.Sister, err)
 		}

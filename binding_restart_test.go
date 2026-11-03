@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// boundTo is what claude_code_sessions says the session local_a is bound to.
+// boundTo is what t3_sessions says the thread cli-1 is bound to.
 func boundTo(t *testing.T, f *fakeHost, s *sisters) string {
 	t.Helper()
 	res, err := s.sessionsTool(context.Background(), f, sessionsIn{})
@@ -20,12 +20,12 @@ func boundTo(t *testing.T, f *fakeHost, s *sisters) string {
 	}
 	_ = json.Unmarshal(raw, &out)
 	for _, it := range out.Sessions {
-		if it["app_session_id"] == "local_a" {
+		if it["session_id"] == "cli-1" {
 			v, _ := it["bound_to"].(string)
 			return v
 		}
 	}
-	t.Fatalf("local_a not listed: %s", raw)
+	t.Fatalf("cli-1 not listed: %s", raw)
 	return ""
 }
 
@@ -56,14 +56,14 @@ func TestBindingSurvivesARestartAndTheListMatches(t *testing.T) {
 	}
 
 	// Rebind: the old code is superseded, the new one works, also after another restart.
-	bindAs(t, f, s, "Alice", "local_a")
+	bindAs(t, f, s, "Alice", "cli-1")
 	newCode := f.events[len(f.events)-1]["bind_code"].(string)
 	if newCode == code {
 		t.Fatal("the rebind kept the code")
 	}
 	s = restart()
 	_, err := s.sendTool(ctx, f, sendIn{VerifiedAgent: "Alice", BindCode: code, Text: "hi"})
-	if err == nil || !strings.Contains(err.Error(), "claude_code_send: superseded bind_code") || !strings.Contains(err.Error(), "replaced") {
+	if err == nil || !strings.Contains(err.Error(), "t3_send: superseded bind_code") || !strings.Contains(err.Error(), "replaced") {
 		t.Errorf("old code: %v", err)
 	}
 	if _, err := s.sendTool(ctx, f, sendIn{VerifiedAgent: "Alice", BindCode: newCode, Text: "hi"}); err != nil {
@@ -81,10 +81,10 @@ func TestBindingSurvivesARestartAndTheListMatches(t *testing.T) {
 		in   statusIn
 		want string
 	}{
-		"missing code":  {statusIn{VerifiedAgent: "Alice"}, "claude_code_status: missing bind_code"},
-		"unknown code":  {statusIn{VerifiedAgent: "Alice", BindCode: "bc_nope"}, "claude_code_status: unknown bind_code"},
-		"another Bot's": {statusIn{VerifiedAgent: "Bob", BindCode: newCode}, "claude_code_status: bind_code of another Bot"},
-		"no binding":    {statusIn{VerifiedAgent: "Bob", BindCode: "bc_nope"}, "claude_code_status: not bound: Bob has no binding"},
+		"missing code":  {statusIn{VerifiedAgent: "Alice"}, "t3_status: missing bind_code"},
+		"unknown code":  {statusIn{VerifiedAgent: "Alice", BindCode: "bc_nope"}, "t3_status: unknown bind_code"},
+		"another Bot's": {statusIn{VerifiedAgent: "Bob", BindCode: newCode}, "t3_status: bind_code of another Bot"},
+		"no binding":    {statusIn{VerifiedAgent: "Bob", BindCode: "bc_nope"}, "t3_status: not bound: Bob has no binding"},
 	} {
 		if _, err := s.statusTool(ctx, f, c.in); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v", name, err)

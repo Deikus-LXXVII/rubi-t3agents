@@ -428,7 +428,6 @@ func goodSSHInput(cmd string) map[string]any {
 func TestSSHAskReachesAStrongApprovalWithTheRoleAndCommand(t *testing.T) {
 	f, s, w := agentFixture(t)
 	s.rc.set("dev_mac", &roleDev{at: time.Now(), roles: map[string]*role{"r_aaaaaaaa": {ID: "r_aaaaaaaa", Name: "deployer"}}})
-	f.next = func(ctx context.Context, _ string) (*request, error) { <-ctx.Done(); return nil, ctx.Err() }
 	f.agent.items = []agentItem{sshAskItem("k1", "r_aaaaaaaa", goodSSHInput("systemctl status app"))}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -534,17 +533,17 @@ func TestBashSSHAlwaysAsksAndNoTrustCoversIt(t *testing.T) {
 		}
 	}
 	// The wording for ssh says what it is.
-	if why := bashAlwaysAsk("rubi-ssh web-1 uptime", agentRoot); !strings.Contains(why, "over SSH") {
+	if why := bashAlwaysAsk(p1Dir, "rubi-ssh web-1 uptime", p1Dir); !strings.Contains(why, "over SSH") {
 		t.Fatalf("%s", why)
 	}
-	if why := bashAlwaysAsk("ssh web-1 uptime", agentRoot); !strings.Contains(why, "over SSH") {
+	if why := bashAlwaysAsk(p1Dir, "ssh web-1 uptime", p1Dir); !strings.Contains(why, "over SSH") {
 		t.Fatalf("%s", why)
 	}
 	// A live project trust and a 2-hour trust cover plain commands, never these.
 	f, s, w := agentFixture(t)
 	trustBot(t, s, botA, "p1")
 	now := time.Now()
-	if err := s.st.issue(mandate{ID: "md_1", Device: "dev_mac", SessionID: "s-1", Cwd: agentRoot, Project: "p1", Issued: now, Expires: now.Add(time.Hour), MaxUses: 50}, now); err != nil {
+	if err := s.st.issue(mandate{ID: "md_1", Device: "dev_mac", SessionID: "s-1", Cwd: p1Dir, Project: "p1", Issued: now, Expires: now.Add(time.Hour), MaxUses: 50}, now); err != nil {
 		t.Fatal(err)
 	}
 	w.handleAsk(context.Background(), mac, bashAsk("b", "rubi-ssh web-1 uptime", "default"))
@@ -571,7 +570,7 @@ func TestSSHTargetKindIsStrongAndLocked(t *testing.T) {
 			}
 		}
 	}
-	if !found || kindSSHTarget != "claude-code.ssh_target" {
+	if !found || kindSSHTarget != "t3agents.ssh_target" {
 		t.Fatal("the kind is not in the manifest")
 	}
 }

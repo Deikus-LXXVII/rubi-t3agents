@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
 )
@@ -99,21 +98,6 @@ func TestAgentRename(t *testing.T) {
 	}
 	if _, ok := s.st.aliasFor("dev_mac", session{SessionID: "s-1"}); ok {
 		t.Fatal("alias set though the runner failed")
-	}
-}
-
-// Agent aliases are not dropped by the hook path's session sweep.
-func TestAgentAliasSurvivesTheHookSweep(t *testing.T) {
-	f, s, _ := agentFixture(t)
-	if _, err := s.st.setAlias("dev_mac", "Mac", session{SessionID: "s-1", Source: "agent", RepoKey: "agent:p1"}, "kept", "user", s.now()); err != nil {
-		t.Fatal(err)
-	}
-	f.sessions = []session{mainSess}
-	later := s.now().Add(2 * aliasTTL)
-	s.now = func() time.Time { return later }
-	s.sweep(f, []deviceSessions{{device: mac, list: []session{mainSess}}}, true)
-	if len(s.st.aliases()) != 1 {
-		t.Fatal("dropped")
 	}
 }
 

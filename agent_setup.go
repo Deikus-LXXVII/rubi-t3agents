@@ -1,7 +1,8 @@
 package main
 
-// The setup page of the agent path: Rubi Home's agent-setup.* operations (docs/design/home-setup-wizard.md in the
-// Rubi repository) behind buttons, so nobody types a command in a terminal. Everything here is the user's own
+// The setup page of T3 Agents: Rubi Home's t3-setup.* operations behind buttons, so nobody types a command in a
+// terminal. The steps are the ones t3-setup.status lists: the Apple container tool (and its service), the runner
+// image, T3 installed and pinned, T3 paired with Rubi, the provider sign-in of each role, and a self-test. Everything here is the user's own
 // request from the panel. Two buttons ask for a strong approval first (the container install, a
 // folder), and "Set up everything" is offered only once the container step is done, so it can't reach it without
 // the approval. Bots get no tool for any of it. What Rubi Home reports (reasons, progress, the sign-in link) is
@@ -20,13 +21,13 @@ import (
 )
 
 const (
-	opSetupStatus  = "agent-setup.status"
-	opSetupRun     = "agent-setup.run"
-	opSetupCode    = "agent-setup.login.code"
-	opSetupOpen    = "agent-setup.login.open"
-	opSetupAdd     = "agent-setup.project.add"
-	opSetupRemove  = "agent-setup.project.remove"
-	opSetupCancel  = "agent-setup.cancel"
+	opSetupStatus  = "t3-setup.status"
+	opSetupRun     = "t3-setup.run"
+	opSetupCode    = "t3-setup.login.code"
+	opSetupOpen    = "t3-setup.login.open"
+	opSetupAdd     = "t3-setup.project.add"
+	opSetupRemove  = "t3-setup.project.remove"
+	opSetupCancel  = "t3-setup.cancel"
 	pageSetup      = "setup"
 	auditSetup     = "agent_setup_action"
 	setupProbeWait = 15 * time.Second // a status call probes the whole machine
@@ -37,12 +38,12 @@ const (
 	setupLineRunes = 200
 	setupMaxCode   = 512
 
-	kindSetupInstall = "claude-code.setup.install"
-	kindSetupProject = "claude-code.setup.project"
+	kindSetupInstall = "t3agents.setup.install"
+	kindSetupProject = "t3agents.setup.project"
 )
 
-// setupProject is one project row of the projects, login and selftest steps; ID is the project id (job and
-// login name a project by it).
+// setupProject is one row of the projects, login and selftest steps; ID is the project id for the folders and
+// selftest rows and the role id for the login rows (a job and a sign-in name them by it).
 type setupProject struct {
 	ID       string   `json:"id"`
 	Dir      string   `json:"dir"`
@@ -72,6 +73,7 @@ type setupStatus struct {
 	Login *struct {
 		URL       string `json:"url"`
 		WantsCode bool   `json:"wants_code"`
+		Role      string `json:"role"` // the role being signed in (t3-setup.login.* answer for the running sign-in)
 	} `json:"login"`
 }
 
@@ -112,7 +114,8 @@ func (st setupStatus) busy() bool {
 }
 
 var setupTitles = map[string]string{"container": "Apple container", "service": "Container service",
-	"image": "Runner image", "projects": "Projects", "login": "Claude sign-in", "selftest": "Self-test"}
+	"image": "Runner image", "t3": "T3 installed and pinned", "pair": "T3 paired with Rubi", "projects": "Projects",
+	"login": "Provider sign-in per role", "selftest": "Self-test"}
 
 var setupStates = map[string]string{"todo": "not done", "working": "working", "done": "done", "failed": "failed", "needs_user": "needs you"}
 
@@ -120,7 +123,7 @@ var setupStates = map[string]string{"todo": "not done", "working": "working", "d
 // tests can switch it off.
 var setupStatusReuse = 2 * time.Second
 
-// setupCap is what is remembered of a computer's agent-setup capability and of its last status.
+// setupCap is what is remembered of a computer's t3-setup capability and of its last status.
 type setupCap struct {
 	ok    bool
 	at    time.Time
@@ -170,7 +173,7 @@ func (s *sisters) setupCapable(ctx context.Context, h sisterHost, device string)
 	return e.ok && now.Sub(e.at) < setupGrace
 }
 
-// setupDevices lists the computers whose Rubi Home has the agent-setup capability.
+// setupDevices lists the computers whose Rubi Home has the t3-setup capability.
 func (s *sisters) setupDevices(ctx context.Context, h sisterHost) []rubiplugin.HomeDevice {
 	devs, err := h.HomeDevices()
 	if err != nil {
@@ -193,14 +196,14 @@ func (s *sisters) setupDevice(ctx context.Context, h sisterHost, device string) 
 			return d, nil
 		}
 	}
-	return rubiplugin.HomeDevice{}, errors.New("that computer doesn't report the agent-setup capability")
+	return rubiplugin.HomeDevice{}, errors.New("that computer doesn't report the t3-setup capability")
 }
 
 // setupLinkSection is the entry on the plugin's first page; empty when no computer has the capability.
 func (s *sisters) setupLinkSection(ctx context.Context, h sisterHost) []map[string]any {
 	var items []map[string]any
 	for _, d := range s.setupDevices(ctx, h) {
-		items = append(items, map[string]any{"title": "Set up the agent path", "detail": oneLine("On "+d.Name+": Apple's container tool, the runner image, Claude's sign-in and a self-test, with buttons only.", 300),
+		items = append(items, map[string]any{"title": "Set up T3 Agents", "detail": oneLine("On "+d.Name+": Apple's container tool, the runner image, T3 (installed and pinned, then paired), each role's sign-in and a self-test, with buttons only.", 300),
 			"actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageSetup, Device: d.ID}.open()}}})
 	}
 	if len(items) == 0 {
@@ -306,7 +309,7 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 	sections := []map[string]any{{"title": "Setup", "note": allNote, "empty": "Nothing is running now.", "items": top, "actions": topActions}}
 
 	// The folders the agents work in are no step of the setup: a Bot adds one when the user asks it
-	// (claude_code_project_add, with the user's approval). They are listed after the steps, with Remove.
+	// (t3_project_add, with the user's approval). They are listed after the steps, with Remove.
 	var folders *setupStep
 	n := 0
 	for _, step := range st.Steps {
@@ -331,19 +334,26 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 		if can {
 			switch step.Action {
 			case "install", "upgrade":
-				actions = append(actions, act(ifElse(step.Action == "upgrade", "Upgrade", "Install"), "setup_install", dev()))
+				if key == "container" {
+					// Apple's installer shows a macOS administrator dialog: it asks for a strong approval first.
+					actions = append(actions, act(ifElse(step.Action == "upgrade", "Upgrade", "Install"), "setup_install", dev()))
+				} else if key == "t3" {
+					actions = append(actions, act(ifElse(step.Action == "upgrade", "Update to the pinned T3", "Install the pinned T3"), "setup_run", map[string]any{"device": d.ID, "step": "t3"}))
+				}
 			case "start":
 				actions = append(actions, act("Start", "setup_run", map[string]any{"device": d.ID, "step": "service"}))
 			case "build":
 				actions = append(actions, act(ifElse(step.State == "done", "Update", "Build"), "setup_run", map[string]any{"device": d.ID, "step": "image"}))
+			case "pair":
+				actions = append(actions, act(ifElse(step.State == "done", "Pair again", "Pair"), "setup_run", map[string]any{"device": d.ID, "step": "pair"}))
 			case "check":
 				actions = append(actions, act("Check the sign-in", "setup_run", map[string]any{"device": d.ID, "step": "login"}))
 			case "login", "login_again":
-				actions = append(actions, act(ifElse(step.Action == "login_again", "Sign in again with a Claude subscription", "Sign in with a Claude subscription"), "setup_run", map[string]any{"device": d.ID, "step": "login", "method": "claudeai"}))
+				actions = append(actions, act(ifElse(step.Action == "login_again", "Sign in again", "Sign in"), "setup_run", map[string]any{"device": d.ID, "step": "login", "method": "claudeai"}))
 			}
 			if step.Action2 == "sign_out" {
 				actions = append(actions, map[string]any{"label": "Sign out", "op": "setup_run", "args": map[string]any{"device": d.ID, "step": "signout"}, "danger": true,
-					"confirm": "Sign out every project on this computer? To revoke the token fully, also remove it at claude.ai settings."})
+					"confirm": "Sign out the roles on this computer? You sign in again with the button of each role."})
 			}
 		}
 		head["actions"] = actions
@@ -364,7 +374,7 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 			projects = projects[:20]
 		}
 		for _, pr := range projects {
-			if key != "selftest" { // the sign-in is one row for the computer
+			if key != "selftest" && key != "login" { // the other steps are one row for the computer
 				break
 			}
 			it := map[string]any{"title": name(pr.ID, pr.Dir)}
@@ -387,6 +397,10 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 					return m
 				}
 				switch pr.Action {
+				case "check":
+					pact = append(pact, act("Check the sign-in", "setup_run", run("login", "")))
+				case "login", "login_again":
+					pact = append(pact, act(ifElse(pr.Action == "login_again", "Sign in again", "Sign in"), "setup_run", run("login", "claudeai")))
 				case "remove":
 					pact = append(pact, map[string]any{"label": "Remove", "op": "setup_remove", "args": pargs, "danger": true, "confirm": "Remove this folder from the agent projects? Its files stay where they are."})
 				case "selftest":
@@ -404,7 +418,7 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 
 		// A sign-in that waits for the browser: the link as text, and the buttons that use it.
 		if key == "login" && st.Login != nil {
-			w := map[string]any{"title": "Sign-in waiting for the browser"}
+			w := map[string]any{"title": "Sign-in waiting for the browser" + ifElse(st.Login.Role != "", " (role "+oneLine(st.Login.Role, 60)+")", "")}
 			detail := "Waiting for Claude's sign-in link."
 			var wact []map[string]any
 			if u := strings.TrimSpace(st.Login.URL); strings.HasPrefix(u, "https://") {
@@ -436,8 +450,8 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 	if sec := s.setupModeSection(ctx, h, d.ID); sec != nil {
 		sections = append(sections, sec)
 	}
-	page := map[string]any{"title": "Set up the agent path: " + oneLine(d.Name, 60), "up": upMain,
-		"note": "The sign-in is one for every project on this computer, with a Claude subscription, for your own personal use under Anthropic's terms. The token stays in Rubi Home on that computer: the agents' VMs never hold it, Rubi Home adds it to their requests to Anthropic. Install shows macOS's own administrator dialog on the computer: this page never asks for a password. Install asks for your strong approval first. The folders the agents work in are added by your Grok Bot when you ask it, each with your strong approval.", "sections": sections}
+	page := map[string]any{"title": "Set up T3 Agents: " + oneLine(d.Name, 60), "up": upMain,
+		"note": "T3 runs on that computer and each role has its own VM. A role signs in to its provider on its own (Claude's `claude auth login`): this page only relays the sign-in link and the code you paste to Rubi Home on that computer. Installing the container tool shows macOS's own administrator dialog on the computer: this page never asks for a password, and it asks for your strong approval first. The folders the agents work in are added by your Grok Bot when you ask it, each with your strong approval.", "sections": sections}
 	if busy || st.Login != nil {
 		page["refresh"] = 3
 	}
@@ -454,7 +468,7 @@ type setupArgs struct {
 type setupTicket struct {
 	Device     string `json:"device"`
 	DeviceName string `json:"device_name"`
-	// Dir is the folder a Bot asked to add (claude_code_project_add); "" for the folder chooser on the computer.
+	// Dir is the folder a Bot asked to add (t3_project_add); "" for the folder chooser on the computer.
 	Dir string `json:"dir,omitempty"`
 }
 
@@ -474,17 +488,23 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 	case "setup_run":
 		args := map[string]any{"step": a.Step}
 		switch a.Step {
-		case "service", "image":
+		case "service", "image", "t3", "pair":
 		case "selftest":
 			if err := s.checkProject(ctx, h, d.ID, a.Project); err != nil {
 				return nil, err
 			}
-		case "login": // one sign-in for the computer; no method only checks it (Rubi Home refuses a Console sign-in)
+		case "login": // a role's sign-in (or the computer's when no role is named); no method only checks it
 			if a.Method != "" && a.Method != "claudeai" {
 				return nil, errors.New("no such sign-in method")
 			}
 			if a.Method != "" {
 				args["method"] = a.Method
+			}
+			if a.Project != "" {
+				if err := s.checkProject(ctx, h, d.ID, a.Project); err != nil {
+					return nil, err
+				}
+				args["role"] = a.Project
 			}
 		case "signout":
 		case "all":
@@ -502,9 +522,12 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 			return nil, errors.New("unknown step")
 		}
 		project := ""
-		if a.Step == "selftest" {
+		switch a.Step {
+		case "selftest":
 			project = a.Project
 			args["project"] = project
+		case "login":
+			project = a.Project
 		}
 		return s.setupCall(ctx, h, d, opSetupRun, args, "run "+a.Step, project)
 	case "setup_open":
@@ -597,8 +620,8 @@ func (s *sisters) executeSetup(ctx context.Context, h sisterHost, t setupTicket,
 }
 
 // setupModeSection is the usage mode of the computer (the default and what "all Bots" means), set here once for
-// all Bots: the user's own button, the same op as the modes page. Hidden when the computer lacks claude-agent.
-// setupFoldersSection lists the agents' project folders with Remove; adding one is the Bot's (claude_code_project_add).
+// all Bots: the user's own button, the same op as the modes page. Hidden when the computer lacks t3-agent.
+// setupFoldersSection lists the agents' project folders with Remove; adding one is the Bot's (t3_project_add).
 func (s *sisters) setupFoldersSection(step setupStep, device string, busy bool) map[string]any {
 	var items []map[string]any
 	projects := step.Projects

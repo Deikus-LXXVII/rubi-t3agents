@@ -12,7 +12,7 @@ import (
 	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
 )
 
-// fakeRoles plays Rubi Home's role store (claude-agent.role.*): versions, base_version conflicts, the checks that
+// fakeRoles plays Rubi Home's role store (t3-agent.role.*): versions, base_version conflicts, the checks that
 // matter to the plugin (approval ids on MCP servers and plugins, blobs, modes) and a toy skill scan: text with
 // mcpServers, allowed-tools or "curl -d" is flagged (held until accepted), text with "AKIA" is rejected.
 type fakeRoles struct {

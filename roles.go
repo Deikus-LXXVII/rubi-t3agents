@@ -1,7 +1,7 @@
 package main
 
 // Agent roles (docs/design/agent-roles.md in the Rubi repository): named profiles on one project of the Rubi Home
-// agent path. Rubi Home keeps the role records (role.* operations of the claude-agent capability); this plugin
+// agent path. Rubi Home keeps the role records (role.* operations of the t3-agent capability); this plugin
 // keeps the tier policy, the per-Bot limits, the approvals and the audit. This file holds the plugin's view of a
 // role, the cache of the role list, the limits (user config) and the tier engine. The tools are in roles_tools.go,
 // the apply/approve machinery in roles_change.go.
@@ -20,20 +20,20 @@ import (
 	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
 )
 
-// Home operations (capability claude-agent).
+// Home operations (capability t3-agent).
 const (
-	opRoleList    = "claude-agent.role.list"
-	opRoleGet     = "claude-agent.role.get"
-	opRoleHistory = "claude-agent.role.history"
-	opRoleDiff    = "claude-agent.role.diff"
-	opRolePut     = "claude-agent.role.put"
+	opRoleList    = "t3-agent.role.list"
+	opRoleGet     = "t3-agent.role.get"
+	opRoleHistory = "t3-agent.role.history"
+	opRoleDiff    = "t3-agent.role.diff"
+	opRolePut     = "t3-agent.role.put"
 )
 
 // Approval kinds of this file's tier 2 changes.
 const (
-	kindRoleForeign     = "claude-code.role_foreign"      // a role on a project the Bot holds no trust for (strong, locked)
-	kindRoleWiden       = "claude-code.role_widen"        // a change that widens a role (strong, locked)
-	kindRoleSkillAccept = "claude-code.role_skill_accept" // a held skill the user accepts (tap, locked)
+	kindRoleForeign     = "t3agents.role_foreign"      // a role on a project the Bot holds no trust for (strong, locked)
+	kindRoleWiden       = "t3agents.role_widen"        // a change that widens a role (strong, locked)
+	kindRoleSkillAccept = "t3agents.role_skill_accept" // a held skill the user accepts (tap, locked)
 )
 
 // The tool lists must match Rubi Home's (internal/home/agent/roles/validate.go). A name outside SafeTools is a

@@ -1,6 +1,6 @@
 package main
 
-// The Bot tools for agent roles (claude_code_role_*). Who is asking comes only from Rubi's verified Bot name
+// The Bot tools for agent roles (t3_role_*). Who is asking comes only from Rubi's verified Bot name
 // (rubi_verified_agent), as in the other tools; no argument names a Bot. Every writing tool builds the proposed
 // role and hands it to changeRole, which decides the tier from the difference.
 
@@ -145,11 +145,11 @@ func checkPlugin(e rolePlugin) []string {
 }
 
 // roleToolNames lists the tools this file registers (a test checks that none changes the limits).
-var roleToolNames = []string{"claude_code_role_create", "claude_code_role_update", "claude_code_role_archive", "claude_code_role_unarchive",
-	"claude_code_role_skills_set", "claude_code_role_skills_add", "claude_code_role_skills_remove", "claude_code_role_tools_set",
-	"claude_code_role_agents_set", "claude_code_role_mcp_set", "claude_code_role_plugins_set", "claude_code_role_hosts_set",
-	"claude_code_role_ssh_grant", "claude_code_role_ssh_revoke", "claude_code_role_start", "claude_code_role_list", "claude_code_role_get",
-	"claude_code_role_history"}
+var roleToolNames = []string{"t3_role_create", "t3_role_update", "t3_role_archive", "t3_role_unarchive",
+	"t3_role_skills_set", "t3_role_skills_add", "t3_role_skills_remove", "t3_role_tools_set",
+	"t3_role_agents_set", "t3_role_mcp_set", "t3_role_plugins_set", "t3_role_hosts_set",
+	"t3_role_ssh_grant", "t3_role_ssh_revoke", "t3_role_start", "t3_role_list", "t3_role_get",
+	"t3_role_history"}
 
 // roleWho is the part every role tool's input shares: who is asking, and on which computer.
 type roleWho struct {
@@ -161,7 +161,7 @@ type roleWho struct {
 
 type roleCreateIn struct {
 	roleWho
-	Project     string `json:"project" jsonschema:"the project (id or directory, as claude_code_projects/claude_code_sessions show it) the role is for"`
+	Project     string `json:"project" jsonschema:"the project (id or directory, as t3_projects/t3_sessions show it) the role is for"`
 	Name        string `json:"name" jsonschema:"1 to 32 characters of a-z, 0-9 and -, unique on the project; not 'default'"`
 	Description string `json:"description,omitempty" jsonschema:"what the role is for (at most 300 characters)"`
 	FromRole    string `json:"from_role,omitempty" jsonschema:"a role id of the same project whose instructions, tools, deny rules, subagents and mode are copied (not its skills, MCP servers, plugins, hosts or SSH grants)"`
@@ -169,7 +169,7 @@ type roleCreateIn struct {
 
 type roleUpdateIn struct {
 	roleWho
-	Role                string  `json:"role" jsonschema:"the role id (r_...) from claude_code_role_list"`
+	Role                string  `json:"role" jsonschema:"the role id (r_...) from t3_role_list"`
 	Name                *string `json:"name,omitempty"`
 	Description         *string `json:"description,omitempty"`
 	Instructions        *string `json:"instructions,omitempty" jsonschema:"the role's prompt, appended to the system prompt (at most 8 KiB)"`
@@ -180,7 +180,7 @@ type roleUpdateIn struct {
 
 type roleRefIn struct {
 	roleWho
-	Role string `json:"role" jsonschema:"the role id (r_...) from claude_code_role_list"`
+	Role string `json:"role" jsonschema:"the role id (r_...) from t3_role_list"`
 }
 
 type roleSkillIn struct {
@@ -270,9 +270,10 @@ type roleSSHIn struct {
 
 type roleStartIn struct {
 	roleWho
-	Role   string `json:"role"`
-	Prompt string `json:"prompt" jsonschema:"the first message of the new session (at most 2000 characters)"`
-	Name   string `json:"name,omitempty" jsonschema:"a name for the session (as claude_code_rename)"`
+	Role   string   `json:"role"`
+	Prompt string   `json:"prompt" jsonschema:"the first message of the new session (at most 2000 characters)"`
+	Name   string   `json:"name,omitempty" jsonschema:"a name for the session (as t3_rename)"`
+	Brief  *briefIn `json:"brief,omitempty" jsonschema:"an optional typed brief, as for t3_start"`
 }
 
 type roleListIn struct {
@@ -292,78 +293,78 @@ type roleHistoryIn struct {
 	Limit int    `json:"limit,omitempty"`
 }
 
-// registerRoleTools adds the claude_code_role_* tools.
+// registerRoleTools adds the t3_role_* tools.
 func registerRoleTools(p *rubiplugin.Plugin, s *sisters) {
 	const roleTierNote = " Changes you may make yourself are applied at once and audited (every change is a new version, revertible); a change that widens the role, or any change on a project you hold no trust for, returns status needs_approval with a link for the user, and nothing is applied until they approve."
-	rubiplugin.AddTool(p, "claude_code_role_create", "Create an agent role: a named profile on a project (its own skills, subagents, tools, mode) that runs in its own VM, isolated from the repository's own .claude. Needs a project you hold a trust for; otherwise one strong approval."+roleTierNote,
+	rubiplugin.AddTool(p, "t3_role_create", "Create an agent role: a named profile on a project (its own skills, subagents, tools, mode) that runs in its own VM, isolated from the repository's own .claude. Needs a project you hold a trust for; otherwise one strong approval."+roleTierNote,
 		func(ctx context.Context, h *rubiplugin.Host, in roleCreateIn) (any, error) {
 			return s.roleCreateTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_update", "Change a role's name, description, instructions, project_instructions or default_mode, or revert it to an older version (revert_to). A mode above the user's ceiling asks the user."+roleTierNote,
+	rubiplugin.AddTool(p, "t3_role_update", "Change a role's name, description, instructions, project_instructions or default_mode, or revert it to an older version (revert_to). A mode above the user's ceiling asks the user."+roleTierNote,
 		func(ctx context.Context, h *rubiplugin.Host, in roleUpdateIn) (any, error) {
 			return s.roleUpdateTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_archive", "Archive a role (it stops being offered; its history stays).",
+	rubiplugin.AddTool(p, "t3_role_archive", "Archive a role (it stops being offered; its history stays).",
 		func(ctx context.Context, h *rubiplugin.Host, in roleRefIn) (any, error) {
 			return s.roleArchiveTool(ctx, h, in, true)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_unarchive", "Bring an archived role back.",
+	rubiplugin.AddTool(p, "t3_role_unarchive", "Bring an archived role back.",
 		func(ctx context.Context, h *rubiplugin.Host, in roleRefIn) (any, error) {
 			return s.roleArchiveTool(ctx, h, in, false)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_skills_set", "Set a role's ad-hoc skills (text only: Claude reads them as context; they grant nothing). A skill the scan flags is saved but held until the user accepts it. Library skills are added with claude_code_role_skills_add."+roleTierNote,
+	rubiplugin.AddTool(p, "t3_role_skills_set", "Set a role's ad-hoc skills (text only: Claude reads them as context; they grant nothing). A skill the scan flags is saved but held until the user accepts it. Library skills are added with t3_role_skills_add."+roleTierNote,
 		func(ctx context.Context, h *rubiplugin.Host, in roleSkillsSetIn) (any, error) {
 			return s.roleSkillsSetTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_skills_add", "Add or replace one ad-hoc skill of a role (name, description, content), or attach a shared library skill (library: id follows the latest admitted version, id@3 pins version 3; only admitted skills, signed by Rubi). A followed skill is updated by Rubi when a newer version is admitted, and dropped if withdrawn. To share a skill you wrote, submit it to the library with rubi_library_submit."+roleTierNote,
+	rubiplugin.AddTool(p, "t3_role_skills_add", "Add or replace one ad-hoc skill of a role (name, description, content), or attach a shared library skill (library: id follows the latest admitted version, id@3 pins version 3; only admitted skills, signed by Rubi). A followed skill is updated by Rubi when a newer version is admitted, and dropped if withdrawn. To share a skill you wrote, submit it to the library with rubi_library_submit."+roleTierNote,
 		func(ctx context.Context, h *rubiplugin.Host, in roleSkillsAddIn) (any, error) {
 			return s.roleSkillsAddTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_skills_remove", "Remove a skill from a role.",
+	rubiplugin.AddTool(p, "t3_role_skills_remove", "Remove a skill from a role.",
 		func(ctx context.Context, h *rubiplugin.Host, in roleSkillsRemoveIn) (any, error) {
 			return s.roleSkillsRemoveTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_tools_set", "Set a role's built-in tools and deny rules. Tools of the safe set (Read, Edit, Write, Glob, Grep, Bash, Agent, Skill, WebFetch, WebSearch) and added deny rules are yours; any other tool, or removing a deny rule the user set, asks the user."+roleTierNote,
+	rubiplugin.AddTool(p, "t3_role_tools_set", "Set a role's built-in tools and deny rules. Tools of the safe set (Read, Edit, Write, Glob, Grep, Bash, Agent, Skill, WebFetch, WebSearch) and added deny rules are yours; any other tool, or removing a deny rule the user set, asks the user."+roleTierNote,
 		func(ctx context.Context, h *rubiplugin.Host, in roleToolsSetIn) (any, error) {
 			return s.roleToolsSetTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_agents_set", "Set a role's subagent definitions (a subagent can never have more tools than the role).",
+	rubiplugin.AddTool(p, "t3_role_agents_set", "Set a role's subagent definitions (a subagent can never have more tools than the role).",
 		func(ctx context.Context, h *rubiplugin.Host, in roleAgentsSetIn) (any, error) {
 			return s.roleAgentsSetTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_mcp_set", "Set a role's MCP servers. Always needs the user's strong approval.",
+	rubiplugin.AddTool(p, "t3_role_mcp_set", "Set a role's MCP servers. Always needs the user's strong approval.",
 		func(ctx context.Context, h *rubiplugin.Host, in roleMCPSetIn) (any, error) {
 			return s.roleMCPSetTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_plugins_set", "Set a role's Claude plugins (they run code). Always needs the user's strong approval.",
+	rubiplugin.AddTool(p, "t3_role_plugins_set", "Set a role's Claude plugins (they run code). Always needs the user's strong approval.",
 		func(ctx context.Context, h *rubiplugin.Host, in rolePluginsSetIn) (any, error) {
 			return s.rolePluginsSetTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_hosts_set", "Set the extra network hosts a role may reach. Always needs the user's strong approval.",
+	rubiplugin.AddTool(p, "t3_role_hosts_set", "Set the extra network hosts a role may reach. Always needs the user's strong approval.",
 		func(ctx context.Context, h *rubiplugin.Host, in roleHostsSetIn) (any, error) {
 			return s.roleHostsSetTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_ssh_grant", "Grant a role one registered SSH target (the user registers targets on Rubi's panel; an unregistered name is rejected). Applied at once and audited when the target has restricted allowed commands or asks each time; a target that allows any command needs the user's approval. The role can then run the target's allowed commands over SSH from its VM.",
+	rubiplugin.AddTool(p, "t3_role_ssh_grant", "Grant a role one registered SSH target (the user registers targets on Rubi's panel; an unregistered name is rejected). Applied at once and audited when the target has restricted allowed commands or asks each time; a target that allows any command needs the user's approval. The role can then run the target's allowed commands over SSH from its VM.",
 		func(ctx context.Context, h *rubiplugin.Host, in roleSSHIn) (any, error) {
 			return s.roleSSHTool(ctx, h, in, true)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_ssh_revoke", "Revoke a role's SSH target. Applied at once; streams the role has open to it are cut.",
+	rubiplugin.AddTool(p, "t3_role_ssh_revoke", "Revoke a role's SSH target. Applied at once; streams the role has open to it are cut.",
 		func(ctx context.Context, h *rubiplugin.Host, in roleSSHIn) (any, error) {
 			return s.roleSSHTool(ctx, h, in, false)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_start", "Start a session in a role's own VM with your prompt as its first message and bind yourself to it. Like claude_code_start: one strong approval, or none inside a project the user trusts for you (never for a role whose mode is bypassPermissions).",
+	rubiplugin.AddTool(p, "t3_role_start", "Start a session in a role's own VM with your prompt as its first message and bind yourself to it. Like t3_start: one strong approval, or none inside a project the user trusts for you (never for a role whose mode is bypassPermissions).",
 		func(ctx context.Context, h *rubiplugin.Host, in roleStartIn) (any, error) {
 			return s.roleStartTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_list", "List the agent roles on the user's computer(s): id, project, name, status, version, who changed it, and the projects' default roles.",
+	rubiplugin.AddTool(p, "t3_role_list", "List the agent roles on the user's computer(s): id, project, name, status, version, who changed it, and the projects' default roles.",
 		func(ctx context.Context, h *rubiplugin.Host, in roleListIn) (any, error) {
 			return s.roleListTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_get", "Read a role (a version of it): instructions, skills with their scan results (not their text), subagents, tools, deny rules, MCP servers, plugins, hosts, SSH grants and mode.",
+	rubiplugin.AddTool(p, "t3_role_get", "Read a role (a version of it): instructions, skills with their scan results (not their text), subagents, tools, deny rules, MCP servers, plugins, hosts, SSH grants and mode.",
 		func(ctx context.Context, h *rubiplugin.Host, in roleGetIn) (any, error) {
 			return s.roleGetTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_history", "List a role's versions, newest first: who changed what, the tier and the approval.",
+	rubiplugin.AddTool(p, "t3_role_history", "List a role's versions, newest first: who changed what, the tier and the approval.",
 		func(ctx context.Context, h *rubiplugin.Host, in roleHistoryIn) (any, error) {
 			return s.roleHistoryTool(ctx, h, in)
 		})
@@ -400,7 +401,7 @@ func (s *sisters) who(h sisterHost, w roleWho) (roleCaller, error) {
 func (s *sisters) roleFor(ctx context.Context, h sisterHost, c roleCaller, ref string) (*role, error) {
 	ref = strings.TrimSpace(ref)
 	if !roleIDRE.MatchString(ref) {
-		return nil, errors.New("role must be a role id such as r_ab12cd34 (claude_code_role_list shows them); a project's default role can't be changed by a Bot, create a role instead")
+		return nil, errors.New("role must be a role id such as r_ab12cd34 (t3_role_list shows them); a project's default role can't be changed by a Bot, create a role instead")
 	}
 	return s.getRole(ctx, h, c.Dev.ID, ref, 0)
 }
@@ -944,7 +945,7 @@ func (s *sisters) roleGetTool(ctx context.Context, h sisterHost, in roleGetIn) (
 	}
 	ref := strings.TrimSpace(in.Role)
 	if !roleIDRE.MatchString(ref) {
-		return nil, errors.New("role must be a role id such as r_ab12cd34 (claude_code_role_list shows them)")
+		return nil, errors.New("role must be a role id such as r_ab12cd34 (t3_role_list shows them)")
 	}
 	return s.getRole(ctx, h, c.Dev.ID, ref, in.Version)
 }
@@ -956,7 +957,7 @@ func (s *sisters) roleHistoryTool(ctx context.Context, h sisterHost, in roleHist
 	}
 	ref := strings.TrimSpace(in.Role)
 	if !roleIDRE.MatchString(ref) {
-		return nil, errors.New("role must be a role id such as r_ab12cd34 (claude_code_role_list shows them)")
+		return nil, errors.New("role must be a role id such as r_ab12cd34 (t3_role_list shows them)")
 	}
 	var out map[string]any
 	hctx, cancel := context.WithTimeout(ctx, listTimeout)

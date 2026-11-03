@@ -4,7 +4,7 @@ package main
 // the plugin allows the session's commands by itself, as long as each one is plain and on the mandate's
 // list. Every such allow is audited. A mandate is bound to one computer, one Claude Code session and its
 // directory, ends after two hours or maxUses commands, and can be revoked in the panel (the plugin's
-// page) or with the claude_code_mandates tool. Locking Rubi stops it too: the helper denies everything
+// page) or with the t3_mandates tool. Locking Rubi stops it too: the helper denies everything
 // while Rubi doesn't poll.
 //
 // Some things always ask, whatever the mandate: pushing or any git command not on the list, --force,
@@ -47,7 +47,7 @@ type mandate struct {
 	MaxUses    int       `json:"max_uses"`
 	Uses       int       `json:"uses"`
 	Approval   string    `json:"approval,omitempty"`
-	// Project is the Rubi Home agent project (claude-agent) the mandate is for; "" for a Claude Code session
+	// Project is the Rubi Home agent project (t3-agent) the mandate is for; "" for a Claude Code session
 	// seen through the hook. A mandate of one never covers the other.
 	Project string `json:"project,omitempty"`
 }

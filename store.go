@@ -28,10 +28,8 @@ type pluginState struct {
 	SSHAuditSeq map[string]int64 `json:"ssh_audit_seq,omitempty"`
 }
 
-// binding ties one Bot (a "sister") to one Claude Code session: the Bot's messages reach only that
-// session, and what the session (or a sub-session of the same project) says goes only to that Bot. It
-// is made by an approval and stays until unbound. A desktop session is followed by the app's id, so the
-// binding survives the app restarting the session under a new Claude Code id.
+// binding ties one Bot (a "sister") to one T3 thread: the Bot's messages reach only that thread, and what the
+// thread says goes only to that Bot. It is made by an approval and stays until unbound.
 type binding struct {
 	Sister       string    `json:"sister"`
 	Device       string    `json:"device"`
@@ -43,12 +41,14 @@ type binding struct {
 	Title        string    `json:"title,omitempty"`
 	Code         string    `json:"code"`
 	Since        time.Time `json:"since"`
-	// Project is the Rubi Home agent project (claude-agent) whose session this is; SessionID is then the agent
+	// Project is the Rubi Home agent project (t3-agent) whose session this is; SessionID is then the agent
 	// session's id. "" for a Claude Code session seen through the hooks.
 	Project string `json:"project,omitempty"`
 	// Role is the agent role (a Rubi Home role id) the bound session runs in; "" is the project's legacy role. Every
 	// call for the session names it, so a Bot bound to a role's session can't reach the legacy role or another role.
 	Role string `json:"role,omitempty"`
+	// BriefID is the brief the thread was started with ("" if none); t3_send accepts only this one.
+	BriefID string `json:"brief_id,omitempty"`
 }
 
 type stateHost interface {
@@ -400,17 +400,17 @@ func (s *store) bindingErr(tool, sister, code string) error {
 	}
 	switch {
 	case code == "" && own != nil:
-		return fmt.Errorf("%s: missing bind_code: %s; pass the bind_code from the claude_bound event of that binding", tool, current)
+		return fmt.Errorf("%s: missing bind_code: %s; pass the bind_code from the t3_bound event of that binding", tool, current)
 	case retired != nil && own != nil:
-		return fmt.Errorf("%s: superseded bind_code: it belonged to an earlier binding of %s (%s on %s); %s: use the bind_code from the claude_bound event of that binding", tool, who, retired.Why, retired.At.UTC().Format(time.RFC3339), current)
+		return fmt.Errorf("%s: superseded bind_code: it belonged to an earlier binding of %s (%s on %s); %s: use the bind_code from the t3_bound event of that binding", tool, who, retired.Why, retired.At.UTC().Format(time.RFC3339), current)
 	case retired != nil:
-		return fmt.Errorf("%s: not bound: the binding of %s with this bind_code was %s on %s; bind again with claude_code_bind", tool, who, retired.Why, retired.At.UTC().Format(time.RFC3339))
+		return fmt.Errorf("%s: not bound: the binding of %s with this bind_code was %s on %s; bind again with t3_bind", tool, who, retired.Why, retired.At.UTC().Format(time.RFC3339))
 	case other:
 		return fmt.Errorf("%s: bind_code of another Bot: this code belongs to another Bot's binding, not to %s", tool, who)
 	case own != nil:
 		return fmt.Errorf("%s: unknown bind_code: %s, but this isn't its bind_code", tool, current)
 	}
-	return fmt.Errorf("%s: not bound: %s has no binding in the plugin's saved state; bind to a session with claude_code_bind, then pass the bind_code you get", tool, who)
+	return fmt.Errorf("%s: not bound: %s has no binding in the plugin's saved state; bind to a session with t3_bind, then pass the bind_code you get", tool, who)
 }
 
 // follow records the session's current Claude Code id for a binding by app id.

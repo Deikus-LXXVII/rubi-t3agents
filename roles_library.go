@@ -42,7 +42,7 @@ const (
 )
 
 // libraryHost is the part of the host that reads the shared skill library: the read-only host method library.get
-// {id, version?} of a plugin that declares the claude-agent capability (version 0 asks for the latest admitted). The
+// {id, version?} of a plugin that declares the t3-agent capability (version 0 asks for the latest admitted). The
 // host in tests implements it; Rubi's SDK Host has it since v0.14.0-rc.2.
 type libraryHost interface {
 	LibraryGet(ctx context.Context, id string, version int, out any) error
@@ -72,7 +72,7 @@ var (
 	libSigRE = regexp.MustCompile(`^[A-Za-z0-9+/=_-]{1,600}$`)
 	shaHexRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-	errLibraryUnavailable = errors.New("this build of the plugin can't read the skill library; update Rubi and the claude-code plugin")
+	errLibraryUnavailable = errors.New("this build of the plugin can't read the skill library; update Rubi and the t3agents plugin")
 )
 
 // errNotAdmitted is core's answer for a skill or version that isn't admitted (withdrawn, rejected, proposed or

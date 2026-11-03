@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-// fakeSSH plays Rubi Home's SSH registry (claude-agent.ssh.*): scan reads the live host key, register pins the one the
+// fakeSSH plays Rubi Home's SSH registry (t3-agent.ssh.*): scan reads the live host key, register pins the one the
 // user confirmed (and refuses a changed key, a taken name and, after a removal, a name without reuse), list shows each
 // target with the roles that have it, audit returns the stream entries.
 type fakeSSH struct {

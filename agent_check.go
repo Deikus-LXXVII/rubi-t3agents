@@ -36,20 +36,20 @@ func toolPaths(tool string, in map[string]any) []string {
 }
 
 // pathProblem says why a path (or glob) in a tool call or a word of a command needs an approval: it is outside
-// /work (also ~ and a .. that leaves it), or it can name a protected part. dir is where relative paths start.
-func pathProblem(p, dir string, glob, write bool) string {
+// the project's directory (also ~ and a .. that leaves it), or it can name a protected part. dir is where relative paths start.
+func pathProblem(root, p, dir string, glob, write bool) string {
 	if p == "" || strings.Contains(p, "://") {
 		return ""
 	}
 	if strings.HasPrefix(p, "~") {
-		return "the path " + oneLine(p, 100) + " is in the home directory, outside " + agentRoot
+		return "the path " + oneLine(p, 100) + " is in the home directory, outside " + root
 	}
 	w := word{text: p, glob: glob || strings.ContainsAny(p, "*?[")}
 	if devNull(p) || p == "/dev/stdin" || p == "/dev/tty" {
 		return ""
 	}
-	if !inside(agentRoot, dir, w) {
-		return "the path " + oneLine(p, 100) + " is outside " + agentRoot
+	if !inside(root, dir, w) {
+		return "the path " + oneLine(p, 100) + " is outside " + root
 	}
 	names := protectedAccess
 	if write {
@@ -87,12 +87,12 @@ func protectedWhy(n string) string {
 }
 
 // agentAlwaysAsk returns why a tool call must have a strong approval whatever the mode, or "".
-func agentAlwaysAsk(tool string, raw json.RawMessage, cwd string) string {
-	if cwd != "" && !within(agentRoot, cwd) {
-		return "the working directory " + cwd + " is outside " + agentRoot
+func agentAlwaysAsk(root, tool string, raw json.RawMessage, cwd string) string {
+	if cwd != "" && !within(root, cwd) {
+		return "the working directory " + cwd + " is outside " + root
 	}
 	if cwd == "" {
-		cwd = agentRoot
+		cwd = root
 	}
 	cwd = path.Clean(cwd)
 	var in map[string]any
@@ -105,7 +105,7 @@ func agentAlwaysAsk(tool string, raw json.RawMessage, cwd string) string {
 		if !ok {
 			return "the Bash input has no command Rubi can read"
 		}
-		return bashAlwaysAsk(cmd, cwd)
+		return bashAlwaysAsk(root, cmd, cwd)
 	case tool == "WebFetch":
 		u, _ := in["url"].(string)
 		if !allowedURL(u) {
@@ -130,7 +130,7 @@ func agentAlwaysAsk(tool string, raw json.RawMessage, cwd string) string {
 			if k == "file_path" || k == "notebook_path" || k == "path" {
 				found = found || s != ""
 			}
-			if why := pathProblem(s, cwd, k == "glob" || k == "pattern", write); why != "" {
+			if why := pathProblem(root, s, cwd, k == "glob" || k == "pattern", write); why != "" {
 				return tool + ": " + why
 			}
 		}
@@ -139,10 +139,10 @@ func agentAlwaysAsk(tool string, raw json.RawMessage, cwd string) string {
 		}
 	case tool == "WebSearch" || tool == "AskUserQuestion" || tool == "Task" || tool == "Agent" || tool == "TodoWrite":
 	default:
-		// Any other tool (an MCP tool ...): text that names a place outside /work asks.
+		// Any other tool (an MCP tool ...): text that names a place outside the project asks.
 		for _, s := range stringsIn(in) {
 			if (strings.HasPrefix(s, "/") || strings.HasPrefix(s, "~") || strings.HasPrefix(s, "../")) && !strings.ContainsAny(s, " \n") {
-				if why := pathProblem(s, cwd, false, true); why != "" {
+				if why := pathProblem(root, s, cwd, false, true); why != "" {
 					return tool + ": " + why
 				}
 			}
@@ -215,14 +215,14 @@ func setOf(s string) map[string]bool {
 
 func baseName(s string) string { return strings.ToLower(path.Base(s)) }
 
-func bashAlwaysAsk(cmd, cwd string) string {
+func bashAlwaysAsk(root, cmd, cwd string) string {
 	segs, bad := splitShell(cmd)
 	if bad != "" {
 		return "the command uses " + bad + ", which Rubi can't check"
 	}
 	dir := cwd
 	for _, sg := range segs {
-		if why := segAlwaysAsk(sg, &dir); why != "" {
+		if why := segAlwaysAsk(root, sg, &dir); why != "" {
 			return why
 		}
 	}
@@ -252,13 +252,13 @@ func wordCandidates(t string) []string {
 	return cands
 }
 
-func segAlwaysAsk(sg segment, dir *string) string {
+func segAlwaysAsk(root string, sg segment, dir *string) string {
 	ws := make([]string, len(sg.words))
 	for i, w := range sg.words {
 		ws[i] = w.text
 	}
 	for _, r := range sg.redirs {
-		if why := pathProblem(r.target.text, *dir, r.target.glob, true); why != "" {
+		if why := pathProblem(root, r.target.text, *dir, r.target.glob, true); why != "" {
 			return "a redirection to " + why
 		}
 	}
@@ -288,7 +288,7 @@ func segAlwaysAsk(sg segment, dir *string) string {
 	case netProgs[prog]:
 		return prog + ": the network outside the allow-list"
 	case linkProgs[prog]:
-		return prog + ": a link can point outside " + agentRoot
+		return prog + ": a link can point outside " + root
 	case prog == "find":
 		for _, w := range rest {
 			if strings.HasPrefix(w, "-exec") || strings.HasPrefix(w, "-ok") || w == "-delete" || w == "-fprint" || strings.HasPrefix(w, "-fprint") || w == "-fls" {
@@ -322,14 +322,14 @@ func segAlwaysAsk(sg segment, dir *string) string {
 			}
 		}
 	case prog == "cd":
-		return cdAsk(rest, dir)
+		return cdAsk(root, rest, dir)
 	}
 	for _, w := range sg.words {
 		for _, c := range wordCandidates(w.text) {
 			if strings.HasPrefix(c, "-") && c == w.text {
 				continue
 			}
-			if why := pathProblem(c, *dir, w.glob, true); why != "" {
+			if why := pathProblem(root, c, *dir, w.glob, true); why != "" {
 				return why
 			}
 		}
@@ -337,8 +337,8 @@ func segAlwaysAsk(sg segment, dir *string) string {
 	return ""
 }
 
-// cdAsk follows cd: the directory it moves to must stay inside /work (a bare cd goes home).
-func cdAsk(args []string, dir *string) string {
+// cdAsk follows cd: the directory it moves to must stay inside the project's directory (a bare cd goes home).
+func cdAsk(root string, args []string, dir *string) string {
 	var target string
 	n := 0
 	for _, a := range args {
@@ -350,15 +350,15 @@ func cdAsk(args []string, dir *string) string {
 	}
 	switch {
 	case n == 0:
-		return "cd with no directory goes to the home directory, outside " + agentRoot
+		return "cd with no directory goes to the home directory, outside " + root
 	case n > 1 || target == "-" || strings.HasPrefix(target, "~") || strings.ContainsAny(target, "*?["):
 		return "cd " + oneLine(target, 80) + ": Rubi can't tell where it goes"
 	}
 	next := resolve(*dir, target)
-	if !within(agentRoot, next) {
-		return "cd " + oneLine(target, 80) + " leaves " + agentRoot
+	if !within(root, next) {
+		return "cd " + oneLine(target, 80) + " leaves " + root
 	}
-	if why := pathProblem(target, *dir, false, true); why != "" {
+	if why := pathProblem(root, target, *dir, false, true); why != "" {
 		return "cd into " + why
 	}
 	*dir = next

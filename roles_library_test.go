@@ -381,7 +381,6 @@ func TestLibraryCheckOnViewAndPeriodicAreBounded(t *testing.T) {
 	// The watcher's refresh starts the check.
 	lib.publish("design-tokens", "admitted", "Use tokens v5.")
 	clock = clock.Add(libraryEvery + time.Second)
-	f.next = func(ctx context.Context, _ string) (*request, error) { <-ctx.Done(); return nil, ctx.Err() }
 	ctx, cancel := context.WithCancel(context.Background())
 	w := newWatcher(f, s)
 	w.refresh(ctx)

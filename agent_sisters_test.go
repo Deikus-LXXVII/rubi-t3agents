@@ -44,9 +44,6 @@ func TestAgentBindSendStatus(t *testing.T) {
 	if len(bs) != 1 || bs[0].Project != "p1" || bs[0].SessionID != "s-1" || bs[0].Cwd != "/home/alice/my-project" {
 		t.Fatalf("%+v", bs)
 	}
-	if len(f.bound) != 0 {
-		t.Fatalf("the hook path's bound call was made: %v", f.bound)
-	}
 	prev := lastSubmit(t, f).Preview.(map[string]any)
 	if prev["project"] != "/home/alice/my-project" || prev["session"] != "s-1" {
 		t.Fatalf("%+v", prev)
@@ -59,7 +56,7 @@ func TestAgentBindSendStatus(t *testing.T) {
 	if _, err := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Bob", Name: "MAIN work"}); err == nil || !strings.Contains(err.Error(), "bound to Alice") {
 		t.Fatalf("by name: %v", err)
 	}
-	// Send: through claude-agent.send, from the verified Bot, without steering.
+	// Send: through t3-agent.send, from the verified Bot, without steering.
 	res, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: " please check the build "})
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +65,7 @@ func TestAgentBindSendStatus(t *testing.T) {
 	if len(c) != 1 || c[0]["project"] != "p1" || c[0]["id"] != "s-1" || c[0]["from"] != "Alice" || c[0]["text"] != "please check the build" || c[0]["steer"] != nil {
 		t.Fatalf("%v", c)
 	}
-	if m := res.(map[string]any); m["queued"] != true || m["position"] != 0 || !strings.Contains(m["delivery"].(string), "claude_reply") {
+	if m := res.(map[string]any); m["queued"] != true || m["position"] != 0 || !strings.Contains(m["delivery"].(string), "t3_reply") {
 		t.Fatalf("%v", res)
 	}
 	// Status.
@@ -87,9 +84,10 @@ func TestAgentBindSendStatus(t *testing.T) {
 	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: "bc_nope", Text: "x"}); err == nil {
 		t.Fatal("wrong code")
 	}
-	// Unbinding tells nobody on the hook path.
-	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Alice", BindCode: code}); err != nil || len(f.bound) != 0 {
-		t.Fatalf("%v %v", err, f.bound)
+	// Unbinding tells Rubi Home nothing: there is no hook to tell.
+	n := len(f.ops)
+	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Alice", BindCode: code}); err != nil || len(f.ops) != n {
+		t.Fatalf("%v %v", err, f.ops[n:])
 	}
 }
 
@@ -152,7 +150,6 @@ func TestAgentSendLimitsAndHints(t *testing.T) {
 func TestAgentSessionsList(t *testing.T) {
 	f, s, _ := agentFixture(t)
 	ctx := context.Background()
-	f.sessions = []session{mainSess}
 	agentBind(t, f, s, "Alice", "s-2")
 	if err := s.st.setAliasForTest("dev_mac", "s-1", "p1", "alpha"); err != nil {
 		t.Fatal(err)
@@ -168,7 +165,7 @@ func TestAgentSessionsList(t *testing.T) {
 			agents = append(agents, it)
 		}
 	}
-	if len(items) != 3 || len(agents) != 2 {
+	if len(items) != 2 || len(agents) != 2 {
 		t.Fatalf("%+v", items)
 	}
 	a1, a2 := agents[0], agents[1]
@@ -283,7 +280,7 @@ func TestAgentProjectTrustForTheBot(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := lastSubmit(t, f)
-	if r.Kind != kindTrustProject || r.Preview.(map[string]any)["project_root"] != agentRoot || r.Preview.(map[string]any)["project_id"] != "p1" {
+	if r.Kind != kindTrustProject || r.Preview.(map[string]any)["project_root"] != p1Dir || r.Preview.(map[string]any)["project_id"] != "p1" {
 		t.Fatalf("%+v", r)
 	}
 	raw, _ := json.Marshal(r.Payload)
@@ -292,7 +289,7 @@ func TestAgentProjectTrustForTheBot(t *testing.T) {
 	if _, err := s.executeTrust(f, tk); err != nil {
 		t.Fatal(err)
 	}
-	if ps := s.st.projects(s.now()); len(ps) != 1 || ps[0].Project != "p1" || ps[0].Root != agentRoot || !ps[0].Unlimited {
+	if ps := s.st.projects(s.now()); len(ps) != 1 || ps[0].Project != "p1" || ps[0].Root != p1Dir || !ps[0].Unlimited {
 		t.Fatalf("%+v", ps)
 	}
 	n := len(f.submits)

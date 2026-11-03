@@ -34,7 +34,7 @@ const (
 // unknownRolesMsg is what a computer without roles shows.
 const unknownRolesMsg = "This computer's Rubi Home doesn't do agent roles yet; update it."
 
-// roleDeviceFor finds a computer with the claude-agent capability by id.
+// roleDeviceFor finds a computer with the t3-agent capability by id.
 func (s *sisters) roleDeviceFor(ctx context.Context, h sisterHost, id string) (rubiplugin.HomeDevice, error) {
 	cctx, cancel := context.WithTimeout(ctx, panelListTimeout)
 	defer cancel()
@@ -43,7 +43,7 @@ func (s *sisters) roleDeviceFor(ctx context.Context, h sisterHost, id string) (r
 			return d, nil
 		}
 	}
-	return rubiplugin.HomeDevice{}, errors.New("that computer doesn't report the claude-agent capability")
+	return rubiplugin.HomeDevice{}, errors.New("that computer doesn't report the t3-agent capability")
 }
 
 func checkRoleID(id string) error {
@@ -199,7 +199,7 @@ func (s *sisters) rolesPage(ctx context.Context, h sisterHost, p panelPage) (any
 		}
 	}
 	if len(sections) == 0 {
-		sections = []map[string]any{{"title": "Roles", "empty": "No computer reports the claude-agent capability."}}
+		sections = []map[string]any{{"title": "Roles", "empty": "No computer reports the t3-agent capability."}}
 	}
 	return map[string]any{"title": "Agent roles", "refresh": 15,
 		"up":       map[string]any{"label": "Projects", "open": panelPage{Page: pageAgent}.open()},

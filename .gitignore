@@ -1,5 +1,5 @@
-/claude-code
-/rubi-claude-code
+/t3agents
+/rubi-t3agents
 /dist/
 go.work
 go.work.sum

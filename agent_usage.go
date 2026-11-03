@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	opAgentUsageMode = "claude-agent.usage_mode"
-	opAgentLimits    = "claude-agent.limits"
+	opAgentUsageMode = "t3-agent.usage_mode"
+	opAgentLimits    = "t3-agent.limits"
 	pageModes        = "modes"
 	auditUsageMode   = "agent_usage_mode_changed"
 	auditLimits      = "agent_limits_changed"
@@ -150,7 +150,7 @@ func (s *sisters) modesPage(ctx context.Context, h sisterHost) (any, error) {
 		sections = append(sections, map[string]any{"title": d.Name + ": Bots", "empty": "No Bot has used the agent path yet; a new Bot gets the default mode.", "items": items}, s.limitsSection(d.ID, d.Name, st))
 	}
 	if len(sections) == 0 {
-		sections = []map[string]any{{"title": "Usage modes", "empty": "No computer reports the claude-agent capability."}}
+		sections = []map[string]any{{"title": "Usage modes", "empty": "No computer reports the t3-agent capability."}}
 	}
 	return map[string]any{"title": "Usage modes", "refresh": 15, "up": upMain, "sections": sections}, nil
 }
@@ -179,7 +179,7 @@ func (s *sisters) panelAgentUsage(ctx context.Context, h sisterHost, device, bot
 		}
 	}
 	if dev == nil {
-		return nil, errors.New("that computer doesn't report the claude-agent capability")
+		return nil, errors.New("that computer doesn't report the t3-agent capability")
 	}
 	args := map[string]any{"mode": mode}
 	who := "all"
@@ -256,7 +256,7 @@ func (s *sisters) panelAgentNew(ctx context.Context, h sisterHost, device, proje
 	return out, nil
 }
 
-// sessionLimits are the three limits the user sets on the usage page (claude-agent.limits). which is the key
+// sessionLimits are the three limits the user sets on the usage page (t3-agent.limits). which is the key
 // Rubi Home takes; min is the smallest value (0 = no cap).
 var sessionLimits = []struct {
 	Which, Title, Label, About string
@@ -319,7 +319,7 @@ func (s *sisters) panelAgentLimits(ctx context.Context, h sisterHost, device, wh
 		}
 	}
 	if dev == nil {
-		return nil, errors.New("that computer doesn't report the claude-agent capability")
+		return nil, errors.New("that computer doesn't report the t3-agent capability")
 	}
 	if err := h.HomeCall(cctx, dev.ID, opAgentLimits, map[string]any{which: n}, nil); err != nil {
 		h.Audit(auditLimits, map[string]any{"device": dev.ID, "which": which, "value": n, "by": "user", "failed": oneLine(err.Error(), 160)})

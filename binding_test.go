@@ -12,8 +12,8 @@ import (
 	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
 )
 
-var mainSess = session{SessionID: "cli-1", AppSessionID: "local_a", Title: "Rubi main", Cwd: "/Users/alice/rubi", RepoKey: "github.com/alice/rubi", Role: "main", Source: "desktop", PermissionMode: "default", State: "idle"}
-var subSess = session{SessionID: "cli-2", AppSessionID: "local_b", Title: "Rubi sub", Cwd: "/Users/alice/rubi/.claude/worktrees/x", RepoKey: "github.com/alice/rubi", Role: "sub", Parent: "local_a", Source: "desktop", State: "busy"}
+var mainSess = session{SessionID: "cli-1", AppSessionID: "cli-1", Title: "Rubi main", Cwd: "/Users/alice/rubi", RepoKey: "github.com/alice/rubi", Role: "main", Source: "desktop", PermissionMode: "default", State: "idle"}
+var subSess = session{SessionID: "cli-2", AppSessionID: "cli-2", Title: "Rubi sub", Cwd: "/Users/alice/rubi/.claude/worktrees/x", RepoKey: "github.com/alice/rubi", Role: "sub", Parent: "cli-1", Source: "desktop", State: "busy"}
 var otherSess = session{SessionID: "cli-3", Title: "Other", Cwd: "/Users/alice/other", RepoKey: "github.com/alice/other", Role: "main", Source: "transcript", PermissionMode: "bypassPermissions", State: "idle"}
 
 func boundFixture(t *testing.T) (*fakeHost, *sisters, string) {
@@ -24,7 +24,7 @@ func boundFixture(t *testing.T) (*fakeHost, *sisters, string) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Alice", SessionID: "local_a"}); err != nil {
+	if _, err := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Alice", SessionID: "cli-1"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.submits) != 1 || f.submits[0].Kind != kindBind {
@@ -49,70 +49,6 @@ func boundFixture(t *testing.T) (*fakeHost, *sisters, string) {
 	return f, s, code
 }
 
-func TestBindSendRoute(t *testing.T) {
-	f, s, code := boundFixture(t)
-	ctx := context.Background()
-	if f.events[0]["_type"] != eventBound || f.events[0]["_agent"] != "Alice" || f.events[0]["bind_code"] != code {
-		t.Fatalf("bound event: %+v", f.events[0])
-	}
-	// The binding is saved and survives a restart.
-	s2 := newSisters(&store{})
-	if err := s2.st.load(f); err != nil || len(s2.st.bindings()) != 1 {
-		t.Fatalf("saved bindings: %v %+v", err, s2.st.bindings())
-	}
-
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: "wrong", Text: "hi"}); err == nil {
-		t.Fatal("send with a wrong code went through")
-	}
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Other", BindCode: code, Text: "hi"}); err == nil {
-		t.Fatal("another Bot sent with the code")
-	}
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: strings.Repeat("x", maxSendText+1)}); err == nil {
-		t.Fatal("bulky text went through")
-	}
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: "audit done: 2 findings"}); err != nil {
-		t.Fatal(err)
-	}
-	if len(f.sent) != 1 || f.sent[0]["session_id"] != "cli-1" || f.sent[0]["from"] != "Alice" {
-		t.Fatalf("sent: %+v", f.sent)
-	}
-
-	// The app restarted the session under a new Claude Code id: the binding follows the app id.
-	f.mu.Lock()
-	f.sessions[0].SessionID = "cli-1b"
-	f.mu.Unlock()
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: "again"}); err != nil {
-		t.Fatal(err)
-	}
-	if f.sent[1]["session_id"] != "cli-1b" || !slices.Contains(f.audits, "binding_followed") {
-		t.Fatalf("binding didn't follow: %+v %v", f.sent[1], f.audits)
-	}
-
-	n := len(f.events)
-	s.route(ctx, f, mac, outMsg{ID: "o1", Kind: "reply", SessionID: "cli-1b", To: "Alice", Text: "thanks, fixed"})
-	s.route(ctx, f, mac, outMsg{ID: "o2", Kind: "reply", SessionID: "cli-1b", To: "Mallory", Text: "x"})
-	s.route(ctx, f, mac, outMsg{ID: "o3", Kind: "reply", SessionID: "cli-3", To: "Alice", Text: "x"})
-	got := f.events[n:]
-	if len(got) != 1 || got[0]["_type"] != eventReply || got[0]["_agent"] != "Alice" || got[0]["text"] != "thanks, fixed" {
-		t.Fatalf("replies routed: %+v", got)
-	}
-
-	// A sub-session of the same project asks; the answer goes back to it.
-	s.route(ctx, f, mac, outMsg{ID: "o4", Kind: "ask", SessionID: "cli-2", AskKind: "research", Text: "latest x?"})
-	s.route(ctx, f, mac, outMsg{ID: "o5", Kind: "ask", SessionID: "cli-3", AskKind: "research", Text: "other project"})
-	got = f.events[n+1:]
-	if len(got) != 1 || got[0]["_type"] != eventAsk || got[0]["role"] != "sub" {
-		t.Fatalf("asks routed: %+v", got)
-	}
-	askID := got[0]["ask_id"].(string)
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: "v2", ReplyToAsk: askID}); err != nil {
-		t.Fatal(err)
-	}
-	if f.sent[2]["session_id"] != "cli-2" {
-		t.Fatalf("answer went to %v", f.sent[2]["session_id"])
-	}
-}
-
 func TestBindOneBotPerSession(t *testing.T) {
 	f, s, code := boundFixture(t)
 	ctx := context.Background()
@@ -130,18 +66,6 @@ func TestBindOneBotPerSession(t *testing.T) {
 	}
 }
 
-func TestSessionsTool(t *testing.T) {
-	f, s, _ := boundFixture(t)
-	out, err := s.sessionsTool(context.Background(), f, sessionsIn{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	items := out.(map[string]any)["sessions"].([]map[string]any)
-	if len(items) != 3 || items[0]["bound_to"] != "Alice" || items[1]["bound_to"] != nil || items[2]["note"] != bypassPermsNote {
-		t.Fatalf("sessions: %+v", items)
-	}
-}
-
 func TestSendRateLimit(t *testing.T) {
 	f, s, code := boundFixture(t)
 	for i := range sendsPerHour {
@@ -151,73 +75,6 @@ func TestSendRateLimit(t *testing.T) {
 	}
 	if _, err := s.sendTool(context.Background(), f, sendIn{Sister: "Alice", BindCode: code, Text: "x"}); err == nil {
 		t.Fatal("no rate limit")
-	}
-}
-
-// A trusted session's plain command is allowed by the plugin itself and audited; push still asks.
-func TestWatcherMandate(t *testing.T) {
-	f := &fakeHost{devices: []rubiplugin.HomeDevice{mac}, states: []string{"pending"}}
-	s := newSisters(&store{})
-	_ = s.st.load(f)
-	r := newRequest("go test ./...")
-	tk, _ := json.Marshal(ticket{Device: mac.ID, ID: r.ID, SessionID: r.SessionID, Digest: r.Digest, Cwd: r.Cwd})
-	res, err := runApproved(context.Background(), f, s, optionTrust, tk)
-	if err != nil || res.(map[string]any)["trusted"] != true {
-		t.Fatalf("trust: %v %+v", err, res)
-	}
-	w := newWatcher(f, s)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	r2 := newRequest("go vet ./... && go test -race ./...")
-	r2.ID = "cc_2"
-	r2.Cwd += "/internal"
-	w.handle(ctx, mac, r2)
-	if len(f.submits) != 0 || len(f.decided) != 2 || f.decided[1].Behavior != "allow" || f.decided[1].ID != "cc_2" {
-		t.Fatalf("not auto-allowed: submits %d, decided %+v", len(f.submits), f.decided)
-	}
-	if !slices.Contains(f.audits, auditMandateAll) {
-		t.Fatalf("not audited: %v", f.audits)
-	}
-
-	for i, c := range []string{"git push", "ls && git push --force", "sudo make"} {
-		r3 := newRequest(c)
-		r3.ID = "cc_p" + string(rune('0'+i))
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 50*time.Millisecond)
-		w.handle(ctx2, mac, r3)
-		cancel2()
-	}
-	if len(f.submits) != 3 || len(f.decided) < 2 {
-		t.Fatalf("refused commands didn't ask: %d submits", len(f.submits))
-	}
-	for _, d := range f.decided[2:] {
-		if d.Behavior == "allow" {
-			t.Fatalf("refused command allowed: %+v", d)
-		}
-	}
-	if p := f.submits[0].Preview.(map[string]any); p["mandate"] == nil {
-		t.Fatalf("no mandate note: %+v", p)
-	}
-
-	// Another session isn't covered.
-	r4 := newRequest("go test ./...")
-	r4.SessionID = "sess-2"
-	ctx3, cancel3 := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	w.handle(ctx3, mac, r4)
-	cancel3()
-	if len(f.submits) != 4 {
-		t.Fatal("another session was auto-allowed")
-	}
-
-	// Revoked: asks again.
-	if n, _ := s.st.revoke("all"); n != 1 {
-		t.Fatalf("revoked %d", n)
-	}
-	ctx4, cancel4 := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	w.handle(ctx4, mac, r2)
-	cancel4()
-	if len(f.submits) != 5 {
-		t.Fatal("revoked mandate still allowed")
 	}
 }
 
@@ -281,104 +138,7 @@ func TestBindNeedsTheVerifiedBot(t *testing.T) {
 	}
 }
 
-// Session messages come through their own poll (claude-sessions.next), not with permission requests.
-func TestWatcherPollsSessionsSeparately(t *testing.T) {
-	f, s, _ := boundFixture(t)
-	f.mu.Lock()
-	f.outs = []outMsg{{ID: "o1", Kind: "reply", SessionID: "cli-1", To: "Alice", Text: "done"}}
-	f.next = func(ctx context.Context, _ string) (*request, error) { <-ctx.Done(); return nil, ctx.Err() }
-	n := len(f.events)
-	f.mu.Unlock()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { newWatcher(f, s).run(ctx); close(done) }()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		f.mu.Lock()
-		got := len(f.events) > n
-		f.mu.Unlock()
-		if got || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	cancel()
-	<-done
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.events) <= n || f.events[n]["_type"] != eventReply || f.events[n]["_agent"] != "Alice" {
-		t.Fatalf("reply not routed: %+v", f.events[n:])
-	}
-	if !slices.Contains(f.ops, "claude.next") || !slices.Contains(f.ops, "claude-sessions.next") {
-		t.Fatalf("ops: %v", f.ops)
-	}
-}
-
-// A computer whose Rubi Home doesn't answer the list becomes a problem in the answer, in time.
-func TestSessionsToolStuckComputer(t *testing.T) {
-	old := listTimeout
-	listTimeout = 50 * time.Millisecond
-	defer func() { listTimeout = old }()
-	f, s, _ := boundFixture(t)
-	f.listHang = true
-	start := time.Now()
-	out, err := s.sessionsTool(context.Background(), f, sessionsIn{})
-	if err != nil || time.Since(start) > 2*time.Second {
-		t.Fatalf("err %v after %s", err, time.Since(start))
-	}
-	probs := out.(map[string]any)["problems"].([]string)
-	if len(probs) != 1 || !strings.Contains(probs[0], "no session list within") {
-		t.Fatalf("problems: %v", probs)
-	}
-}
-
-// A computer whose Claude Code hook binary is older than its Rubi Home (or speaks a refused protocol) gets a
-// problem that names the fix; a current or unknown hook gets none.
-func TestSessionsToolStaleHookProblem(t *testing.T) {
-	f, s, _ := boundFixture(t)
-	probs := func() []string {
-		out, err := s.sessionsTool(context.Background(), f, sessionsIn{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return out.(map[string]any)["problems"].([]string)
-	}
-	if p := probs(); len(p) != 0 {
-		t.Fatalf("no hook info: %v", p)
-	}
-	f.mu.Lock()
-	f.listHook = map[string]any{"version": "v0.13.0", "path": "/usr/local/bin/rubi-home", "protocol": 1, "stale": false, "home_version": "v0.13.0"}
-	f.mu.Unlock()
-	if p := probs(); len(p) != 0 {
-		t.Fatalf("current hook: %v", p)
-	}
-	for _, tc := range []struct {
-		hook map[string]any
-		want []string
-	}{
-		{map[string]any{"version": "v0.12.1", "protocol": 1, "stale": true, "home_version": "v0.13.0"},
-			[]string{"hook binary on ", " is v0.12.1 (Rubi Home v0.13.0): run `~/.rubi-home/bin/rubi-home install-hook` there"}},
-		{map[string]any{"version": "", "protocol": 0, "stale": true, "legacy": true, "home_version": "v0.13.0"},
-			[]string{"an old one without version information (Rubi Home v0.13.0)", "install-hook"}},
-		{map[string]any{"version": "v0.20.0", "protocol": 2, "refused": true, "home_version": "v0.13.0"},
-			[]string{"v0.20.0", "protocol (2)", "denied", "install-hook"}},
-	} {
-		f.mu.Lock()
-		f.listHook = tc.hook
-		f.mu.Unlock()
-		p := probs()
-		if len(p) != 1 {
-			t.Fatalf("%v: %v", tc.hook, p)
-		}
-		for _, w := range tc.want {
-			if !strings.Contains(p[0], w) {
-				t.Errorf("problem %q lacks %q", p[0], w)
-			}
-		}
-	}
-}
-
-// TestBindUndoneWhenTheCodeCantBeDelivered: when the addressed claude_bound event can't reach the
+// TestBindUndoneWhenTheCodeCantBeDelivered: when the addressed t3_bound event can't reach the
 // sister, the binding isn't made (or the earlier one stays) and the error carries no code.
 func TestBindUndoneWhenTheCodeCantBeDelivered(t *testing.T) {
 	f, s, code := boundFixture(t)
@@ -407,48 +167,6 @@ func TestBindUndoneWhenTheCodeCantBeDelivered(t *testing.T) {
 	}
 	if _, err := s.executeBind(f, tk); err == nil || len(s.st.bindings()) != 0 {
 		t.Fatalf("a binding without a delivered code was kept: %v %+v", err, s.st.bindings())
-	}
-}
-
-// TestSendSaysWhenClaudeReads: claude_code_send reports the session's state and when Claude is likely
-// to read the message; a message to an ended session isn't queued at all.
-func TestSendSaysWhenClaudeReads(t *testing.T) {
-	f, s, code := boundFixture(t)
-	ctx := context.Background()
-	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
-	s.now = func() time.Time { return now }
-	set := func(state string, last time.Time) {
-		f.mu.Lock()
-		f.sessions[0].State, f.sessions[0].LastActivity = state, last
-		f.mu.Unlock()
-	}
-	send := func() map[string]any {
-		t.Helper()
-		res, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: "hi"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return res.(map[string]any)
-	}
-
-	set("idle", now.Add(-30*time.Minute))
-	r := send()
-	if r["session_state"] != "idle" || !strings.Contains(r["delivery"].(string), "idle for 30m") ||
-		!strings.Contains(r["delivery"].(string), "next prompts it") || r["last_activity"] != "2026-10-30T11:30:00Z" {
-		t.Fatalf("idle: %+v", r)
-	}
-	set("busy", now.Add(-time.Minute))
-	if r := send(); r["session_state"] != "busy" || !strings.Contains(r["delivery"].(string), "next stop") {
-		t.Fatalf("busy: %+v", r)
-	}
-	set("unknown", time.Time{})
-	if r := send(); r["session_state"] != "unknown" || r["last_activity"] != nil || !strings.Contains(r["delivery"].(string), "doesn't know") {
-		t.Fatalf("unknown: %+v", r)
-	}
-	n := len(f.sent)
-	set("ended", now.Add(-time.Hour))
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: "hi"}); err == nil || !strings.Contains(err.Error(), "ended") || len(f.sent) != n {
-		t.Fatalf("ended session: %v, sent %d", err, len(f.sent)-n)
 	}
 }
 
@@ -487,177 +205,16 @@ func bindAs(t *testing.T, f *fakeHost, s *sisters, bot, sessionID string) {
 	}
 }
 
-// TestAskFromUnboundSessionPicksOneBinding: an ask from an unbound session of a project with several
-// bound sessions goes to the Bot of its parent session, else to the Bot of the main session, not to
-// whichever binding happens to be last.
-func TestAskFromUnboundSessionPicksOneBinding(t *testing.T) {
-	f, s, _ := boundFixture(t) // Alice: the main session local_a
-	ctx := context.Background()
-	later := time.Now().Add(time.Hour)
-	s.now = func() time.Time { return later }
-	bindAs(t, f, s, "Vega", "local_b") // Vega: the sub-session, bound later
-	orphan := session{SessionID: "cli-5", Title: "loose", Cwd: "/Users/alice/rubi/tmp", RepoKey: "github.com/alice/rubi", Role: "sub", Source: "transcript", State: "busy"}
-	child := session{SessionID: "cli-6", Title: "child of sub", Cwd: "/Users/alice/rubi/.claude/worktrees/y", RepoKey: "github.com/alice/rubi", Role: "sub", Parent: "local_b", Source: "transcript", State: "busy"}
-	f.mu.Lock()
-	f.sessions = append(f.sessions, orphan, child)
-	f.mu.Unlock()
-
-	n := len(f.events)
-	s.route(ctx, f, mac, outMsg{ID: "a1", Kind: "ask", SessionID: "cli-5", AskKind: "research", Text: "q1"})
-	s.route(ctx, f, mac, outMsg{ID: "a2", Kind: "ask", SessionID: "cli-6", AskKind: "research", Text: "q2"})
-	got := f.events[n:]
-	if len(got) != 2 || got[0]["_agent"] != "Alice" || got[1]["_agent"] != "Vega" {
-		t.Fatalf("asks went to: %+v", got)
-	}
-}
-
-// TestSessionListAsksComputersAtOnce: stuck computers cost one timeout together, not one each, and the
-// answer keeps the order Rubi listed the computers in.
-func TestSessionListAsksComputersAtOnce(t *testing.T) {
-	old := listTimeout
-	listTimeout = 200 * time.Millisecond
-	defer func() { listTimeout = old }()
-	devs := []rubiplugin.HomeDevice{{ID: "d1", Name: "Stuck 1"}, mac, {ID: "d3", Name: "Stuck 3"}, {ID: "d4", Name: "Stuck 4"}, {ID: "d5", Name: "Stuck 5"}}
-	f := &fakeHost{devices: devs, sessions: []session{mainSess}, hangOn: map[string]bool{"d1": true, "d3": true, "d4": true, "d5": true}}
-	start := time.Now()
-	all, err := listSessions(context.Background(), f, "", false)
-	if took := time.Since(start); err != nil || took > 600*time.Millisecond { // one after another: 800ms or more
-		t.Fatalf("err %v after %s", err, took)
-	}
-	if len(all) != len(devs) {
-		t.Fatalf("got %d computers", len(all))
-	}
-	for i, ds := range all {
-		stuck := f.hangOn[ds.device.ID]
-		if ds.device.ID != devs[i].ID || stuck != (ds.err != nil) || !stuck && len(ds.list) != 1 {
-			t.Fatalf("computer %d: %+v", i, ds)
-		}
-		if stuck && !strings.Contains(ds.err.Error(), "no session list within") {
-			t.Fatalf("computer %d: %v", i, ds.err)
-		}
-	}
-}
-
-func TestStatusRouting(t *testing.T) {
-	f, s, _ := boundFixture(t)
-	ctx := context.Background()
-	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
-	n := len(f.events)
-	s.route(ctx, f, mac, outMsg{ID: "msg_1", Kind: "status", SessionID: "cli-1", To: "alice", State: "delivered", At: at})
-	s.route(ctx, f, mac, outMsg{ID: "msg_2", Kind: "status", SessionID: "cli-1", To: "Mallory", State: "delivered", At: at}) // not the bound Bot
-	s.route(ctx, f, mac, outMsg{ID: "msg_3", Kind: "status", SessionID: "cli-3", To: "Alice", State: "queued", At: at})      // unbound session
-	s.route(ctx, f, mac, outMsg{ID: "msg_4", Kind: "mystery", SessionID: "cli-1", To: "Alice", State: "x", At: at})          // unknown kind
-	got := f.events[n:]
-	if len(got) != 1 || got[0]["_type"] != eventMessage || got[0]["_agent"] != "Alice" || got[0]["id"] != "msg_1" ||
-		got[0]["state"] != "delivered" || got[0]["session_id"] != "cli-1" || got[0]["at"] != "2026-10-30T12:00:00Z" {
-		t.Fatalf("status events: %+v", got)
-	}
-	// The sister is unbound: statuses for her go nowhere, quietly.
-	if _, err := s.st.unbind("Alice"); err != nil {
-		t.Fatal(err)
-	}
-	n = len(f.events)
-	s.route(ctx, f, mac, outMsg{ID: "msg_1", Kind: "status", SessionID: "cli-1", To: "Alice", State: "answered", At: at})
-	if len(f.events) != n {
-		t.Fatalf("status for an unbound sister was emitted: %+v", f.events[n:])
-	}
-}
-
-func TestStatusTool(t *testing.T) {
-	f, s, code := boundFixture(t)
-	ctx := context.Background()
-	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
-	s.now = func() time.Time { return now }
-	set := func(state string, waiting int) {
-		f.mu.Lock()
-		f.sessions[0].State, f.sessions[0].Waiting, f.sessions[0].LastActivity = state, waiting, now.Add(-time.Hour)
-		f.mu.Unlock()
-	}
-	call := func() map[string]any {
-		t.Helper()
-		r, err := s.statusTool(ctx, f, statusIn{Sister: "Alice", BindCode: code, VerifiedAgent: "Alice"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return r.(map[string]any)
-	}
-	set("busy", 2)
-	r := call()
-	if r["state"] != "busy" || r["waiting"] != 2 || r["eta"] != "at its next stop" || r["session_id"] != "cli-1" || r["device"] != mac.ID {
-		t.Fatalf("busy: %+v", r)
-	}
-	set("idle", 0)
-	r = call()
-	if r["waiter"] != false || r["state"] != "idle" || !strings.Contains(r["eta"].(string), "idle since") || r["last_activity"] != "2026-10-30T11:00:00Z" {
-		t.Fatalf("idle: %+v", r)
-	}
-	f.mu.Lock()
-	f.sessions[0].Waiter = true
-	f.mu.Unlock()
-	if r = call(); r["waiter"] != true || r["eta"] != "within seconds (a waiter is attached)" {
-		t.Fatalf("idle with a waiter: %+v", r)
-	}
-	if got := etaText(session{State: "idle"}, false); !strings.HasPrefix(got, "when the user next prompts it") {
-		t.Fatal(got)
-	}
-	set("ended", 0)
-	if _, err := s.statusTool(ctx, f, statusIn{Sister: "Alice", BindCode: code}); err == nil || !strings.Contains(err.Error(), "ended") {
-		t.Fatalf("ended: %v", err)
-	}
-	set("idle", 0)
-	for name, in := range map[string]statusIn{
-		"wrong code":   {Sister: "Alice", BindCode: "bc_wrong"},
-		"other Bot":    {Sister: "Alice", BindCode: code, VerifiedAgent: "Mallory"},
-		"unknown name": {Sister: "Nobody", BindCode: code},
-	} {
-		if _, err := s.statusTool(ctx, f, in); err == nil {
-			t.Errorf("%s: status went through", name)
-		}
-	}
-}
-
-func TestSendUsesWaiterFields(t *testing.T) {
-	f, s, code := boundFixture(t)
-	ctx := context.Background()
-	send := func() map[string]any {
-		t.Helper()
-		r, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: "hi"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return r.(map[string]any)
-	}
-	// Older Rubi Home: no new fields, the hint comes from the session list.
-	r := send()
-	if _, has := r["waiter"]; has || !strings.Contains(r["delivery"].(string), "next prompts it") {
-		t.Fatalf("old home: %+v", r)
-	}
-	f.sendExtra = map[string]any{"session_state": "idle", "waiter": true}
-	r = send()
-	if r["waiter"] != true || r["session_state"] != "idle" || !strings.Contains(r["delivery"].(string), "within seconds") {
-		t.Fatalf("waiter: %+v", r)
-	}
-	f.sendExtra = map[string]any{"session_state": "idle", "waiter": false}
-	if r = send(); r["waiter"] != false || !strings.Contains(r["delivery"].(string), "next prompts it") {
-		t.Fatalf("no waiter: %+v", r)
-	}
-	// The send result's state wins over the (older) session list.
-	f.sendExtra = map[string]any{"session_state": "busy", "waiter": false}
-	if r = send(); r["session_state"] != "busy" || !strings.Contains(r["delivery"].(string), "next stop") {
-		t.Fatalf("busy: %+v", r)
-	}
-}
-
 // A Bot's own binding is its own whatever the "sister" argument says: callers pass the session's id or
 // name (or nothing, or another spelling) there, and only the Bot Rubi verified and the code decide.
-// claude_code_status and _send used to answer "this binding belongs to another Bot" for them.
+// t3_status and _send used to answer "this binding belongs to another Bot" for them.
 func TestOwnBindingIgnoresTypedSisterWhenVerified(t *testing.T) {
 	f, s, code := boundFixture(t)
 	ctx := context.Background()
 	if _, err := s.renameTool(ctx, f, renameIn{VerifiedAgent: "Alice", Name: "Rubi core"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, typed := range []string{"", "local_a", "cli-1", "Rubi core", "rubi core", "Rubi main"} {
+	for _, typed := range []string{"", "cli-1", "cli-1", "Rubi core", "rubi core", "Rubi main"} {
 		if _, err := s.statusTool(ctx, f, statusIn{Sister: typed, BindCode: code, VerifiedAgent: "Alice"}); err != nil {
 			t.Fatalf("status with sister %q: %v", typed, err)
 		}
@@ -665,19 +222,14 @@ func TestOwnBindingIgnoresTypedSisterWhenVerified(t *testing.T) {
 			t.Fatalf("send with sister %q: %v", typed, err)
 		}
 	}
-	// The session's id changes (the desktop app starts a new CLI session): the binding is still its own.
-	s.st.follow("Alice", "cli-9")
-	if _, err := s.statusTool(ctx, f, statusIn{Sister: "cli-9", BindCode: code, VerifiedAgent: "Alice"}); err != nil {
-		t.Fatalf("status after the id change: %v", err)
-	}
 	// Still refused: another verified Bot, a wrong code, and nobody verified with a typed name that isn't the Bot's.
 	if _, err := s.statusTool(ctx, f, statusIn{Sister: "Alice", BindCode: code, VerifiedAgent: "Vega"}); err == nil {
 		t.Fatal("another verified Bot read Alice's status")
 	}
-	if _, err := s.statusTool(ctx, f, statusIn{Sister: "local_a", BindCode: "bc_wrong", VerifiedAgent: "Alice"}); err == nil {
+	if _, err := s.statusTool(ctx, f, statusIn{Sister: "cli-1", BindCode: "bc_wrong", VerifiedAgent: "Alice"}); err == nil {
 		t.Fatal("a wrong code went through")
 	}
-	if _, err := s.statusTool(ctx, f, statusIn{Sister: "local_a", BindCode: code}); err == nil {
+	if _, err := s.statusTool(ctx, f, statusIn{Sister: "cli-1", BindCode: code}); err == nil {
 		t.Fatal("an unverified call with a non-Bot name went through")
 	}
 	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Rubi core", BindCode: code, VerifiedAgent: "Alice"}); err != nil || len(s.st.bindings()) != 0 {

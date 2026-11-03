@@ -6,7 +6,7 @@ import (
 )
 
 // classify says whether a Bash command is on the short list of read-only commands that may be approved
-// the quick way (the claude-code.run_safe action), and if not, why. It is deliberately conservative: a
+// the quick way (the t3agents.run_safe action), and if not, why. It is deliberately conservative: a
 // command is safe only if it is one plain command (no shell syntax at all: no pipes, redirections,
 // substitutions, globs, quotes or variables), the program is ls, cat, pwd or git status/diff/log, and no
 // argument names a credential or a path outside the project. Anything else needs the strong approval.

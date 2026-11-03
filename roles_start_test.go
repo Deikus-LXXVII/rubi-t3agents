@@ -22,7 +22,7 @@ func TestRoleStartUnderTrustNeedsNoApproval(t *testing.T) {
 	if r := f.agent.called(opAgentRename); len(r) != 1 || r[0]["name"] != "logo work" || r[0]["id"] != "s-new" {
 		t.Fatalf("%v", r)
 	}
-	if a := auditsOf(f, auditMandateAll); len(a) != 1 || a[0]["action"] != "claude_code_role_start" {
+	if a := auditsOf(f, auditMandateAll); len(a) != 1 || a[0]["action"] != "t3_role_start" {
 		t.Fatalf("%v", a)
 	}
 }

@@ -1,4 +1,4 @@
-module github.com/Deikus-LXXVII/rubi-claude-code
+module github.com/Deikus-LXXVII/rubi-t3agents
 
 go 1.26.4
 

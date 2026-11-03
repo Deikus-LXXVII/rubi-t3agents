@@ -20,9 +20,9 @@ import (
 )
 
 const (
-	opAgentMessages  = "claude-agent.messages"
-	opAgentInterrupt = "claude-agent.interrupt"
-	opAgentClose     = "claude-agent.close"
+	opAgentMessages  = "t3-agent.messages"
+	opAgentInterrupt = "t3-agent.interrupt"
+	opAgentClose     = "t3-agent.close"
 
 	pageAgent    = "agent"
 	pageSessions = "sessions"
@@ -110,7 +110,7 @@ func (s *sisters) agentLinkSection(ctx context.Context, h sisterHost) []map[stri
 		}}}
 }
 
-// agentSlot is a running top-level session (claude-agent.status "slots").
+// agentSlot is a running top-level session (t3-agent.status "slots").
 type agentSlot struct {
 	Project    string `json:"project"`
 	Role       string `json:"role,omitempty"`
@@ -122,7 +122,7 @@ type agentSlot struct {
 	Subagents  int    `json:"subagents"`
 }
 
-// botUsage is one Bot's row of claude-agent.status "usage.bots".
+// botUsage is one Bot's row of t3-agent.status "usage.bots".
 type botUsage struct {
 	ID                  string `json:"id"`
 	Mode                string `json:"mode"`
@@ -352,7 +352,7 @@ func (s *sisters) projectsPage(ctx context.Context, h sisterHost) (any, error) {
 		}
 	}
 	if len(sections) == 0 {
-		sections = []map[string]any{{"title": "Projects", "empty": "No computer reports the claude-agent capability."}}
+		sections = []map[string]any{{"title": "Projects", "empty": "No computer reports the t3-agent capability."}}
 	}
 	return map[string]any{"title": "Claude in project VMs", "refresh": 15, "up": upMain, "sections": sections}, nil
 }
@@ -392,7 +392,7 @@ func (s *sisters) sessionsPage(ctx context.Context, h sisterHost, p panelPage) (
 	defer cancel()
 	ads := s.listAgent(lctx, h, p.Device)
 	if len(ads) == 0 {
-		return nil, errors.New("that computer doesn't report the claude-agent capability")
+		return nil, errors.New("that computer doesn't report the t3-agent capability")
 	}
 	ad := ads[0]
 	if ad.err != nil && len(ad.sessions) == 0 {
@@ -653,7 +653,7 @@ func (s *sisters) chatPage(ctx context.Context, h sisterHost, p panelPage) (any,
 			"input":   map[string]any{"op": "send", "args": args, "arg": "text", "label": "Message to Claude (sent as you)", "send": "Send"}}}}, nil
 }
 
-// parseUsage reads claude-agent.status's usage_today: a number (US dollars) or an object with an estimate.
+// parseUsage reads t3-agent.status's usage_today: a number (US dollars) or an object with an estimate.
 func parseUsage(raw json.RawMessage) (usd float64, tokens int64, ok bool) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return 0, 0, false
@@ -744,8 +744,8 @@ func (s *sisters) usagePage(ctx context.Context, h sisterHost) (any, error) {
 	}
 	return map[string]any{"title": "Usage and sign-in", "refresh": 60, "up": upMain,
 		"sections": []map[string]any{
-			{"title": "Today", "note": fmt.Sprintf("A yellow notice shows above $%.2f (set it in the plugin's settings). It never blocks anything.", warn), "empty": "No computer reports the claude-agent capability.", "items": usage},
-			{"title": "Sign-in", "empty": "No computer reports the claude-agent capability.", "items": login},
+			{"title": "Today", "note": fmt.Sprintf("A yellow notice shows above $%.2f (set it in the plugin's settings). It never blocks anything.", warn), "empty": "No computer reports the t3-agent capability.", "items": usage},
+			{"title": "Sign-in", "empty": "No computer reports the t3-agent capability.", "items": login},
 		}}, nil
 }
 
@@ -797,7 +797,7 @@ func (s *sisters) panelAgentSimple(ctx context.Context, h sisterHost, op, device
 	}
 	cctx, cancel := context.WithTimeout(ctx, panelListTimeout)
 	defer cancel()
-	action := strings.TrimPrefix(op, "claude-agent.")
+	action := strings.TrimPrefix(op, "t3-agent.")
 	if err := h.HomeCall(cctx, device, op, withRole(map[string]any{"project": project, "id": id}, role), nil); err != nil {
 		h.Audit(auditPanelAgent, withRole(map[string]any{"action": action, "device": device, "project": project, "session": id, "by": "user", "failed": oneLine(err.Error(), 160)}, role))
 		return nil, err

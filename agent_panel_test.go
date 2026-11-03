@@ -121,7 +121,7 @@ func TestPanelAgentProjectsAndSessions(t *testing.T) {
 
 func TestPanelAgentNoCapabilityNoLink(t *testing.T) {
 	f, s, _ := agentFixture(t)
-	f.agent.failOp = map[string]error{opAgentStatus: errors.New("Rubi Home doesn't do claude-agent.status")}
+	f.agent.failOp = map[string]error{opAgentStatus: errors.New("Rubi Home doesn't do t3-agent.status")}
 	main := view(t, s, f, `{}`)
 	for _, sec := range main["sections"].([]map[string]any) {
 		if sec["title"] == "Claude in project VMs" {
@@ -209,7 +209,7 @@ func TestPanelAgentActions(t *testing.T) {
 		if _, err := call(op, `{`+base+`}`); err != nil {
 			t.Fatal(err)
 		}
-		if c := f.agent.called("claude-agent." + op); len(c) != 1 || c[0]["id"] != "s-1" {
+		if c := f.agent.called("t3-agent." + op); len(c) != 1 || c[0]["id"] != "s-1" {
 			t.Fatalf("%s %v", op, c)
 		}
 	}
@@ -566,7 +566,7 @@ func TestNoBotToolForUsageModes(t *testing.T) {
 // The session limits are the user's too: the operation is reached from the panel only, like the usage modes, and
 // no Bot tool mentions it or has a field for it.
 func TestNoBotToolForSessionLimits(t *testing.T) {
-	bad := []string{"claude-agent.limits", "opAgentLimits", "panelAgentLimits", `"per_profile"`, `"per_project"`, "limitsSection", "sessionLimits"}
+	bad := []string{"t3-agent.limits", "opAgentLimits", "panelAgentLimits", `"per_profile"`, `"per_project"`, "limitsSection", "sessionLimits"}
 	files, _ := filepath.Glob("*.go")
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") || f == "agent_usage.go" || f == "panel.go" || f == "agent_panel.go" {

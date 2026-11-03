@@ -3,7 +3,7 @@ package main
 // SSH targets (docs/design/agent-roles.md section 9, and agent-runner.md "SSH relay (R11)"). Rubi Home holds the
 // target registry, the private keys and the pinned host keys, and does the network work; the VM never sees a key or
 // a host. This plugin is the user's side of it: the panel page that lists, adds and removes targets, the strong
-// approval `claude-code.ssh_target` that carries the host key fingerprint the user confirmed, the role grants
+// approval `t3agents.ssh_target` that carries the host key fingerprint the user confirmed, the role grants
 // (tier 1 for a registered target), the ssh.ask questions of targets registered with ask_each_time, and the plugin
 // side of the audit. A Bot can't register a target: registration is panel-only. It may grant a restricted one (tier 1); granting one that allows any command is tier 2.
 
@@ -22,17 +22,17 @@ import (
 	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
 )
 
-// Home operations (capability claude-agent).
+// Home operations (capability t3-agent).
 const (
-	opSSHScan     = "claude-agent.ssh.scan"
-	opSSHRegister = "claude-agent.ssh.register"
-	opSSHList     = "claude-agent.ssh.list"
-	opSSHRemove   = "claude-agent.ssh.remove"
-	opSSHAudit    = "claude-agent.ssh.audit"
+	opSSHScan     = "t3-agent.ssh.scan"
+	opSSHRegister = "t3-agent.ssh.register"
+	opSSHList     = "t3-agent.ssh.list"
+	opSSHRemove   = "t3-agent.ssh.remove"
+	opSSHAudit    = "t3-agent.ssh.audit"
 )
 
 const (
-	kindSSHTarget = "claude-code.ssh_target" // registering a target (strong, locked)
+	kindSSHTarget = "t3agents.ssh_target" // registering a target (strong, locked)
 
 	pageSSH      = "ssh"
 	pageSSHAudit = "ssh_audit"
@@ -353,7 +353,7 @@ func (s *sisters) sshPage(ctx context.Context, h sisterHost, p panelPage) (any, 
 		}
 	}
 	if len(sections) == 0 {
-		sections = []map[string]any{{"title": "SSH targets", "empty": "No computer reports the claude-agent capability."}}
+		sections = []map[string]any{{"title": "SSH targets", "empty": "No computer reports the t3-agent capability."}}
 	}
 	return map[string]any{"title": "SSH targets", "refresh": 20,
 		"up":       map[string]any{"label": "Projects", "open": panelPage{Page: pageAgent}.open()},
