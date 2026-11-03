@@ -1,6 +1,6 @@
 package main
 
-// Permission modes of agent sessions (t3_mode and the panel's mode op). The order, strictest first, is
+// Permission modes of agent sessions (t3agents_mode and the panel's mode op). The order, strictest first, is
 // plan, default, acceptEdits, bypassPermissions. A change to a stricter mode needs no approval; to a looser one it
 // needs a strong approval (a passkey). Rubi Home forwards a mode to the runner only when this plugin asked for it.
 
@@ -25,7 +25,7 @@ type modeIn struct {
 	AgentCode     string `json:"rubi_agent_code,omitempty" jsonschema:"the agent_code of your latest Rubi webhook; proves you are that Bot"`
 	VerifiedAgent string `json:"rubi_verified_agent,omitempty" jsonschema:"set by Rubi; don't pass it"`
 	Device        string `json:"device,omitempty" jsonschema:"the computer, when there are several"`
-	Project       string `json:"project" jsonschema:"the project (id or directory, as t3_sessions shows it)"`
+	Project       string `json:"project" jsonschema:"the project (id or directory, as t3agents_sessions shows it)"`
 	Session       string `json:"session" jsonschema:"the session's id or name"`
 	Mode          string `json:"mode" jsonschema:"plan, default, acceptEdits or bypassPermissions"`
 }
@@ -61,7 +61,7 @@ func (s *sisters) changeMode(ctx context.Context, h sisterHost, sister, device, 
 		return nil, err
 	}
 	if !found {
-		return nil, errors.New("no such agent session (list them with t3_sessions)")
+		return nil, errors.New("no such agent session (list them with t3agents_sessions)")
 	}
 	if !byUser && !s.allow("mode|"+strings.ToLower(sister), modesPerHour) {
 		return nil, fmt.Errorf("at most %d mode changes an hour", modesPerHour)

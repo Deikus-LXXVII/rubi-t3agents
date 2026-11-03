@@ -1,6 +1,6 @@
 package main
 
-// Forking an agent session (t3_fork): a branch of the conversation, idle until something is sent to it.
+// Forking an agent session (t3agents_fork): a branch of the conversation, idle until something is sent to it.
 // The approval is a tap when the Bot forks the session it is bound to and a strong one for any other session.
 
 import (
@@ -24,7 +24,7 @@ type forkIn struct {
 	AgentCode     string `json:"rubi_agent_code,omitempty" jsonschema:"the agent_code of your latest Rubi webhook (or call rubi_verify with your name to get one); proves you are that Bot"`
 	VerifiedAgent string `json:"rubi_verified_agent,omitempty" jsonschema:"set by Rubi; don't pass it"`
 	Device        string `json:"device,omitempty" jsonschema:"the computer, when there are several"`
-	Project       string `json:"project,omitempty" jsonschema:"the project (id or directory), as t3_sessions shows it"`
+	Project       string `json:"project,omitempty" jsonschema:"the project (id or directory), as t3agents_sessions shows it"`
 	Session       string `json:"session,omitempty" jsonschema:"the session's id or name; leave out for the session you are bound to"`
 	Name          string `json:"name,omitempty" jsonschema:"a name for the fork (1 to 64 plain characters, unique on the computer)"`
 }
@@ -74,7 +74,7 @@ func (s *sisters) forkTool(ctx context.Context, h sisterHost, in forkIn) (any, e
 		return nil, err
 	}
 	if !found {
-		return nil, errors.New("no such agent session (list them with t3_sessions)")
+		return nil, errors.New("no such agent session (list them with t3agents_sessions)")
 	}
 	if strings.TrimSpace(in.Session) == "" && ref.sess.Role != wantRole {
 		return nil, errors.New("the session you are bound to isn't there any more")
@@ -127,7 +127,7 @@ func (s *sisters) executeFork(ctx context.Context, h sisterHost, t forkTicket) (
 	}
 	h.Audit(auditForked, map[string]any{"device": t.Device, "project": t.Project, "session": t.SessionID, "fork": res.ID, "sister": t.Sister, "name": oneLine(t.Name, maxNameRunes)})
 	out := map[string]any{"forked": true, "session_id": res.ID, "from": t.SessionID, "project": t.Project,
-		"next_step": "The fork is idle. Bind to it with t3_bind (a new approval unless the project is trusted) and send it a message to start it."}
+		"next_step": "The fork is idle. Bind to it with t3agents_bind (a new approval unless the project is trusted) and send it a message to start it."}
 	if t.Name != "" {
 		// The runner got the name; Rubi keeps the alias too, if the name is still free.
 		sess := session{SessionID: res.ID, Source: "agent", RepoKey: "agent:" + t.Project}

@@ -1,6 +1,6 @@
 package main
 
-// t3_role_start: a session in a role's own VM. The approval rule is t3_start's: one strong
+// t3agents_role_start: a session in a role's own VM. The approval rule is t3agents_start's: one strong
 // approval, or none inside a project the user trusts for this Bot (never for a mode that skips permission prompts).
 
 import (
@@ -22,7 +22,7 @@ func (s *sisters) roleStartTool(ctx context.Context, h sisterHost, in roleStartI
 	case task == "":
 		return nil, errors.New("prompt is empty")
 	case len([]rune(task)) > maxStartTask:
-		return nil, fmt.Errorf("prompt is longer than %d characters: start the session with a short prompt and send the details with t3_send", maxStartTask)
+		return nil, fmt.Errorf("prompt is longer than %d characters: start the session with a short prompt and send the details with t3agents_send", maxStartTask)
 	}
 	if err := checkStartText(task); err != nil {
 		return nil, err
@@ -64,7 +64,7 @@ func (s *sisters) roleStartTool(ctx context.Context, h sisterHost, in roleStartI
 	if pt := s.botTrust(c.Dev.ID, c.Bot, proj.ID); pt != nil && mode != "bypassPermissions" {
 		used := s.st.useProject(c.Dev.ID, s.now(), func(p projectTrust) bool { return p.ID == pt.ID })
 		if used != nil {
-			h.Audit(auditMandateAll, map[string]any{"mandate": used.ID, "project": proj.ID, "device": c.Dev.ID, "sister": c.Bot, "action": "t3_role_start", "role": r.ID, "uses": used.Uses})
+			h.Audit(auditMandateAll, map[string]any{"mandate": used.ID, "project": proj.ID, "device": c.Dev.ID, "sister": c.Bot, "action": "t3agents_role_start", "role": r.ID, "uses": used.Uses})
 			res, err := s.executeStart(ctx, h, t)
 			if m, ok := res.(map[string]any); ok && err == nil {
 				m["approval"] = "none needed: " + used.ID + ", the user's trust of the project " + proj.ID + " " + s.trustEnd(*used)

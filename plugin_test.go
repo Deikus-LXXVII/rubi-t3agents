@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -217,13 +218,13 @@ func TestManifest(t *testing.T) {
 	}
 }
 
-// The tool names are the t3_ family and no tool keeps the old prefix.
+// The tool names are the t3agents_ family and no tool keeps the old prefix.
 func TestToolNames(t *testing.T) {
 	src, err := os.ReadFile("main.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"t3_start", "t3_send", "t3_status", "t3_sessions", "t3_bind", "t3_unbind", "t3_fork", "t3_mode", "t3_rename", "t3_mandates", "t3_trust_project", "t3_project_add"} {
+	for _, name := range []string{"t3agents_start", "t3agents_send", "t3agents_status", "t3agents_sessions", "t3agents_bind", "t3agents_unbind", "t3agents_fork", "t3agents_mode", "t3agents_rename", "t3agents_mandates", "t3agents_trust_project", "t3agents_project_add"} {
 		if !strings.Contains(string(src), `"`+name+`"`) {
 			t.Errorf("tool %s is not registered", name)
 		}
@@ -232,8 +233,8 @@ func TestToolNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(rs), `"t3_role_create"`) || !strings.Contains(string(rs), `"t3_role_update"`) {
-		t.Error("the role tools are not t3_role_*")
+	if !strings.Contains(string(rs), `"t3agents_role_create"`) || !strings.Contains(string(rs), `"t3agents_role_update"`) {
+		t.Error("the role tools are not t3agents_role_*")
 	}
 	all, _ := filepath.Glob("*.go")
 	for _, f := range all {
@@ -297,5 +298,76 @@ func TestTrustOptionIsHonest(t *testing.T) {
 	}
 	if strings.Contains(meaning, "never push, --force, sudo, network") {
 		t.Errorf("trust meaning still promises no network at all: %s", meaning)
+	}
+}
+
+// toolPattern is core's rule for a tool name, copied from internal/plugins/manifest.go in the Rubi core
+// (the regexp toolPattern, next to idPattern and namePattern). Keep it the same as core's.
+var toolPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// toolPrefix is rubiplugin.ToolPrefix(id) from the SDK (strings.ReplaceAll(id, "-", "_") + "_"); core requires
+// every tool name of a plugin to start with it. Written out here so the check does not depend on the SDK having it.
+func toolPrefix(id string) string { return strings.ReplaceAll(id, "-", "_") + "_" }
+
+// manifestLikeCore is the manifest as `--manifest` prints it: the plugin built as main builds it, with every tool
+// registered, so the tool list is the one core sees.
+func manifestLikeCore(t *testing.T) rubiplugin.Manifest {
+	t.Helper()
+	m := newPlugin().Manifest()
+	var round rubiplugin.Manifest
+	b, err := json.Marshal(m)
+	if err != nil || json.Unmarshal(b, &round) != nil {
+		t.Fatal("manifest does not round-trip through JSON", err)
+	}
+	return round
+}
+
+// Core refuses a plugin whose tool does not start with the id-derived prefix or does not match the tool pattern,
+// and one whose action kind does not start with id+".".
+func TestToolsAndKindsFollowCoresRules(t *testing.T) {
+	m := manifestLikeCore(t)
+	if toolPrefix(m.ID) != rubiplugin.ToolPrefix(m.ID) {
+		t.Fatalf("local prefix %q differs from the SDK's %q", toolPrefix(m.ID), rubiplugin.ToolPrefix(m.ID))
+	}
+	checkTools(t, m.ID, toolNames(m))
+	for _, a := range m.Actions {
+		if !strings.HasPrefix(a.Kind, m.ID+".") {
+			t.Errorf("action kind %q must start with %q", a.Kind, m.ID+".")
+		}
+	}
+	if len(m.Tools) < 30 {
+		t.Errorf("only %d tools in the manifest: the registered tools are missing", len(m.Tools))
+	}
+}
+
+func toolNames(m rubiplugin.Manifest) []string {
+	var out []string
+	for _, tl := range m.Tools {
+		out = append(out, tl.Name)
+	}
+	return out
+}
+
+func checkTools(t *testing.T, id string, names []string) (bad int) {
+	t.Helper()
+	prefix := toolPrefix(id)
+	for _, n := range names {
+		if !strings.HasPrefix(n, prefix) || !toolPattern.MatchString(n) {
+			t.Errorf("tool %q must start with %q and match %s", n, prefix, toolPattern)
+			bad++
+		}
+	}
+	return bad
+}
+
+// The check itself fails on a bad name (it is not vacuous).
+func TestToolRuleCheckCatchesABadName(t *testing.T) {
+	for _, n := range []string{"t3_sessions", "t3agents-sessions", "T3agents_x", "t3agents_" + strings.Repeat("a", 64), "sessions"} {
+		if strings.HasPrefix(n, toolPrefix("t3agents")) && toolPattern.MatchString(n) {
+			t.Errorf("%q passes the rule", n)
+		}
+	}
+	if !toolPattern.MatchString("t3agents_role_create") || !strings.HasPrefix("t3agents_role_create", toolPrefix("t3agents")) {
+		t.Error("a good name fails the rule")
 	}
 }

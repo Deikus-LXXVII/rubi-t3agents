@@ -16,7 +16,7 @@ package main
 // Home, of the plugin or of Rubi keeps it until it ends or is revoked.
 //
 // A project trust can also be given "until revoked" (Unlimited): it has no end time and no count limit, and
-// only a revoke (the panel, t3_mandates) or a locked Rubi stops it; it is never pruned. It is the
+// only a revoke (the panel, t3agents_mandates) or a locked Rubi stops it; it is never pruned. It is the
 // same trust in every other respect (same check, same branch rule, same always-ask list, each allow audited
 // and counted), and the approval says in capitals that it has no end.
 
@@ -33,8 +33,8 @@ import (
 const (
 	optionTrustProject     = "trust_project"
 	optionTrustForever     = "trust_project_until_revoked"
-	untilFour              = "0400"    // t3_trust_project until=: the default, as before
-	untilRevoked           = "revoked" // t3_trust_project until=: no end time
+	untilFour              = "0400"    // t3agents_trust_project until=: the default, as before
+	untilRevoked           = "revoked" // t3agents_trust_project until=: no end time
 	kindTrustProject       = "t3agents.trust_project"
 	ptMaxUses              = 2000
 	maxProjectTrusts       = 20
@@ -300,7 +300,7 @@ func (s *sisters) trustMeaning(o trustOffer, command bool) string {
 	ends := "until then"
 	if o.Unlimited {
 		ends = "until you revoke it"
-		fmt.Fprintf(&b, "UNTIL REVOKED — no end time. This trust stays on across restarts of Rubi, of the plugin and of Rubi Home and across days and weeks, until you revoke it in the panel or with t3_mandates (while Rubi is locked nothing is allowed, but it is still there when you unlock). Nothing else ends it: there is no time limit and no limit on the number of commands (each use is still counted and audited). Rubi allows plain, listed commands by itself in every T3 thread of the project %s on %s, including threads started later. ",
+		fmt.Fprintf(&b, "UNTIL REVOKED — no end time. This trust stays on across restarts of Rubi, of the plugin and of Rubi Home and across days and weeks, until you revoke it in the panel or with t3agents_mandates (while Rubi is locked nothing is allowed, but it is still there when you unlock). Nothing else ends it: there is no time limit and no limit on the number of commands (each use is still counted and audited). Rubi allows plain, listed commands by itself in every T3 thread of the project %s on %s, including threads started later. ",
 			o.Root, firstNonEmpty(o.DeviceName, "that computer"))
 	} else {
 		fmt.Fprintf(&b, "Until %s (%s; at most 24 hours, so on a daylight-saving change it can end up to an hour before 04:00), Rubi allows plain, listed commands by itself in every T3 thread of the project %s on %s, including threads started later, each one audited (at most %d). ",
@@ -314,7 +314,7 @@ func (s *sisters) trustMeaning(o trustOffer, command bool) string {
 	if o.Unlimited {
 		b.WriteString("Because it has no end, it covers every day's work in this project, builds and scripts that run the project's own code included, and a Bot that can open threads in the project without asking: look at the panel's list of trusted projects now and then and revoke what you no longer need. ")
 	}
-	b.WriteString("Revoke it in the panel or with t3_mandates")
+	b.WriteString("Revoke it in the panel or with t3agents_mandates")
 	return b.String()
 }
 
@@ -372,7 +372,7 @@ func trustMode(p projectTrust) string {
 // ---- the sister tool ----
 
 type trustIn struct {
-	// Who is asking: as in t3_bind, Rubi confirms the Bot's name and passes it on.
+	// Who is asking: as in t3agents_bind, Rubi confirms the Bot's name and passes it on.
 	Agent         string `json:"rubi_agent" jsonschema:"your Bot name as connected to Rubi"`
 	AgentCode     string `json:"rubi_agent_code,omitempty" jsonschema:"the agent_code of your latest Rubi webhook (or call rubi_verify with your name to get one); proves you are that Bot"`
 	VerifiedAgent string `json:"rubi_verified_agent,omitempty" jsonschema:"set by Rubi; don't pass it"`
@@ -393,7 +393,7 @@ func (s *sisters) trustTool(ctx context.Context, h sisterHost, in trustIn) (any,
 	if sister == "" || len(sister) > 64 {
 		return nil, errors.New("Rubi didn't confirm which Bot you are: pass rubi_agent (your Bot name) and rubi_agent_code (the agent_code of your latest Rubi webhook, or call rubi_verify to get one)")
 	}
-	b, err := s.st.ownBindingFor("t3_trust_project", sister, in.VerifiedAgent, in.BindCode)
+	b, err := s.st.ownBindingFor("t3agents_trust_project", sister, in.VerifiedAgent, in.BindCode)
 	if err != nil {
 		return nil, err
 	}

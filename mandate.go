@@ -4,7 +4,7 @@ package main
 // the plugin allows the session's commands by itself, as long as each one is plain and on the mandate's
 // list. Every such allow is audited. A mandate is bound to one computer, one Claude Code session and its
 // directory, ends after two hours or maxUses commands, and can be revoked in the panel (the plugin's
-// page) or with the t3_mandates tool. Locking Rubi stops it too: the helper denies everything
+// page) or with the t3agents_mandates tool. Locking Rubi stops it too: the helper denies everything
 // while Rubi doesn't poll.
 //
 // Some things always ask, whatever the mandate: pushing or any git command not on the list, --force,

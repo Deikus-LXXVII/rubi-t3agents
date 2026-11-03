@@ -56,7 +56,7 @@ func (s *sisters) bindAgent(ctx context.Context, h sisterHost, sister string, re
 	}
 	t := bindTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, SessionID: sess.ID, RepoKey: proj.Dir, Cwd: proj.Dir, Title: sess.Name, Project: proj.ID, Role: sess.Role}
 	if pt := s.agentProjectCovering(d.ID, sister, proj.ID); pt != nil && s.allow("bindpt|"+strings.ToLower(sister), bindsUnderTrustPerHour) {
-		h.Audit(auditMandateAll, map[string]any{"mandate": pt.ID, "project": proj.ID, "device": d.ID, "sister": sister, "action": "t3_bind", "session": sess.ID, "uses": pt.Uses})
+		h.Audit(auditMandateAll, map[string]any{"mandate": pt.ID, "project": proj.ID, "device": d.ID, "sister": sister, "action": "t3agents_bind", "session": sess.ID, "uses": pt.Uses})
 		res, err := s.executeBind(h, t)
 		if m, ok := res.(map[string]any); ok && err == nil {
 			m["approval"] = "none needed: " + pt.ID + ", the user's trust of the project " + proj.ID + " " + s.trustEnd(*pt)
@@ -135,7 +135,7 @@ func (s *sisters) statusAgent(ctx context.Context, h sisterHost, b binding) (any
 		}
 	}
 	if sess == nil {
-		return nil, errors.New("the bound session isn't there any more; bind to a live one (t3_sessions)")
+		return nil, errors.New("the bound session isn't there any more; bind to a live one (t3agents_sessions)")
 	}
 	running := st.slotList()
 	inSlot := false
@@ -192,7 +192,7 @@ func (s *sisters) statusAgent(ctx context.Context, h sisterHost, b binding) (any
 
 // ---- the list ----
 
-// agentSessionItems are the agent sessions for t3_sessions.
+// agentSessionItems are the agent sessions for t3agents_sessions.
 func (s *sisters) agentSessionItems(ctx context.Context, h sisterHost, repo string) ([]map[string]any, []string) {
 	bound := map[string]string{}
 	for _, b := range s.st.bindings() {
@@ -252,7 +252,7 @@ func (s *sisters) startAgent(ctx context.Context, h sisterHost, sister string, d
 	t := startTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, Cwd: proj.Dir, Task: task, Project: proj.ID, Mode: mode, BriefID: briefID}
 	// Under a project trust a Bot starts sessions without asking, but never one that skips permission prompts.
 	if pt := s.agentProjectCovering(d.ID, sister, proj.ID); pt != nil && mode != "bypassPermissions" {
-		h.Audit(auditMandateAll, map[string]any{"mandate": pt.ID, "project": proj.ID, "device": d.ID, "sister": sister, "action": "t3_start", "uses": pt.Uses})
+		h.Audit(auditMandateAll, map[string]any{"mandate": pt.ID, "project": proj.ID, "device": d.ID, "sister": sister, "action": "t3agents_start", "uses": pt.Uses})
 		res, err := s.executeStart(ctx, h, t)
 		if m, ok := res.(map[string]any); ok && err == nil {
 			m["approval"] = "none needed: " + pt.ID + ", the user's trust of the project " + proj.ID + " " + s.trustEnd(*pt)
@@ -310,7 +310,7 @@ func (s *sisters) executeStartAgent(ctx context.Context, h sisterHost, t startTi
 			return nil, fmt.Errorf("no session was started: %v", err)
 		}
 		h.Audit("session_start_unknown", map[string]any{"sister": t.Sister, "device": t.Device, "project": t.Project})
-		return nil, fmt.Errorf("no answer from Rubi Home (%v): the session may have been started; look for it with t3_sessions before trying again", err)
+		return nil, fmt.Errorf("no answer from Rubi Home (%v): the session may have been started; look for it with t3agents_sessions before trying again", err)
 	}
 	h.Audit("session_started", map[string]any{"sister": t.Sister, "device": t.Device, "project": t.Project, "session": res.ID, "mode": t.Mode, "queued": res.Queued})
 	out := map[string]any{"started": !res.Queued, "queued": res.Queued, "project": t.Project, "permission_mode": t.Mode}
@@ -326,7 +326,7 @@ func (s *sisters) executeStartAgent(ctx context.Context, h sisterHost, t startTi
 	if res.ID == "" {
 		out["bound"] = false
 		out["position"] = res.Position
-		out["next_step"] = fmt.Sprintf("A limit is reached (by default one session per project), so the new one waits in Rubi Home's queue (position %d). When it appears in t3_sessions, call t3_bind with its session_id: that is a new approval.", res.Position)
+		out["next_step"] = fmt.Sprintf("A limit is reached (by default one session per project), so the new one waits in Rubi Home's queue (position %d). When it appears in t3agents_sessions, call t3agents_bind with its session_id: that is a new approval.", res.Position)
 		return out, nil
 	}
 	out["session_id"] = res.ID

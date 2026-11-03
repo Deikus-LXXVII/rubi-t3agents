@@ -207,7 +207,7 @@ func bindAs(t *testing.T, f *fakeHost, s *sisters, bot, sessionID string) {
 
 // A Bot's own binding is its own whatever the "sister" argument says: callers pass the session's id or
 // name (or nothing, or another spelling) there, and only the Bot Rubi verified and the code decide.
-// t3_status and _send used to answer "this binding belongs to another Bot" for them.
+// t3agents_status and _send used to answer "this binding belongs to another Bot" for them.
 func TestOwnBindingIgnoresTypedSisterWhenVerified(t *testing.T) {
 	f, s, code := boundFixture(t)
 	ctx := context.Background()

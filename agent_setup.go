@@ -309,7 +309,7 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 	sections := []map[string]any{{"title": "Setup", "note": allNote, "empty": "Nothing is running now.", "items": top, "actions": topActions}}
 
 	// The folders the agents work in are no step of the setup: a Bot adds one when the user asks it
-	// (t3_project_add, with the user's approval). They are listed after the steps, with Remove.
+	// (t3agents_project_add, with the user's approval). They are listed after the steps, with Remove.
 	var folders *setupStep
 	n := 0
 	for _, step := range st.Steps {
@@ -468,7 +468,7 @@ type setupArgs struct {
 type setupTicket struct {
 	Device     string `json:"device"`
 	DeviceName string `json:"device_name"`
-	// Dir is the folder a Bot asked to add (t3_project_add); "" for the folder chooser on the computer.
+	// Dir is the folder a Bot asked to add (t3agents_project_add); "" for the folder chooser on the computer.
 	Dir string `json:"dir,omitempty"`
 }
 
@@ -621,7 +621,7 @@ func (s *sisters) executeSetup(ctx context.Context, h sisterHost, t setupTicket,
 
 // setupModeSection is the usage mode of the computer (the default and what "all Bots" means), set here once for
 // all Bots: the user's own button, the same op as the modes page. Hidden when the computer lacks t3-agent.
-// setupFoldersSection lists the agents' project folders with Remove; adding one is the Bot's (t3_project_add).
+// setupFoldersSection lists the agents' project folders with Remove; adding one is the Bot's (t3agents_project_add).
 func (s *sisters) setupFoldersSection(step setupStep, device string, busy bool) map[string]any {
 	var items []map[string]any
 	projects := step.Projects

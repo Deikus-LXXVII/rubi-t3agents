@@ -224,7 +224,7 @@ func TestProjectTrustTextIsHonest(t *testing.T) {
 			t.Errorf("manifest meaning lacks %q", want)
 		}
 	}
-	for _, want := range []string{"UNTIL REVOKED", "no end time", "t3_mandates", "revoke"} {
+	for _, want := range []string{"UNTIL REVOKED", "no end time", "t3agents_mandates", "revoke"} {
 		if !strings.Contains(a.Options[1].Meaning, want) {
 			t.Errorf("until-revoked meaning lacks %q", want)
 		}

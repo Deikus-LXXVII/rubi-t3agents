@@ -1,7 +1,7 @@
 package main
 
 // The project trust and the 2-hour trust, driven through the T3 path: a Bot bound to a thread asks for the trust
-// (t3_trust_project), the user approves, and the questions of the project's threads (perm.ask) are allowed or
+// (t3agents_trust_project), the user approves, and the questions of the project's threads (perm.ask) are allowed or
 // asked about by the same checks as ever.
 
 import (
@@ -28,7 +28,7 @@ func t3Fixture(t *testing.T) (*fakeHost, *sisters, *watcher, string, *time.Time)
 	return f, s, w, code, &now
 }
 
-// grantT3 plays the user approving t3_trust_project, and returns the trust's id.
+// grantT3 plays the user approving t3agents_trust_project, and returns the trust's id.
 func grantT3(t *testing.T, f *fakeHost, s *sisters, code, until string) string {
 	t.Helper()
 	if _, err := s.trustTool(context.Background(), f, trustIn{VerifiedAgent: "Alice", BindCode: code, Until: until}); err != nil {
@@ -360,7 +360,7 @@ func TestT3TrustToolApproval(t *testing.T) {
 	if r.Kind != kindTrustProject || pv["project_id"] != "p1" || pv["branches"] != "agent/*" || !strings.Contains(fmt.Sprint(pv["until"]), "04:00") || len(r.Options) != 1 || r.Options[0].Key != optionTrustProject {
 		t.Fatalf("%+v", r)
 	}
-	for _, want := range []string{"T3 thread", "Still asks", "git push", "t3_mandates"} {
+	for _, want := range []string{"T3 thread", "Still asks", "git push", "t3agents_mandates"} {
 		if !strings.Contains(r.Options[0].Meaning, want) {
 			t.Errorf("meaning lacks %q:\n%s", want, r.Options[0].Meaning)
 		}

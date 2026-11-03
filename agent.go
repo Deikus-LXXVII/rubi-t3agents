@@ -544,7 +544,7 @@ func (s *sisters) routeAgent(ctx context.Context, h sisterHost, d rubiplugin.Hom
 		h.Audit("ask_forwarded", map[string]any{"sister": target.Sister, "session": it.SessionID, "ask": id, "kind": it.AskKind})
 		data := map[string]any{"ask_id": id, "kind": it.AskKind, "text": it.Text, "session_id": it.SessionID, "project": it.Project,
 			"directory": s.cachedRoot(d.ID, it.Project), "computer": d.Name, "role": "main", "agent_role": target.Role, "title": "",
-			"next_step": "Answer briefly with t3_send {sister, bind_code, text, reply_to_ask: ask_id}. Small research or audit only."}
+			"next_step": "Answer briefly with t3agents_send {sister, bind_code, text, reply_to_ask: ask_id}. Small research or audit only."}
 		if _, err := h.EmitTo(target.Sister, eventAsk, data); err != nil {
 			h.Logf("ask to %s: %v", target.Sister, err)
 		}

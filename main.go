@@ -58,7 +58,7 @@ func manifest() rubiplugin.Manifest {
 				Options: []rubiplugin.Option{{Key: optionTrustProject, Label: "Trust this project until 04:00",
 					Meaning: "Until the next 04:00 (at most 24 hours; the approval names the exact time, date, time zone, the project directory, the computer and the branches) Rubi allows the plain, listed commands of every T3 thread of the project, and lets the Bot start and bind threads in it without a new approval. Commits go to the branch a thread is on, which may be main. Push and every remote git command, --force, sudo, network commands, installs, tags, credential paths, writing outside the project and branches outside the pattern still ask"},
 					{Key: optionTrustForever, Label: "Trust this project until I revoke it",
-						Meaning: "UNTIL REVOKED — no end time: this trust has no time or count limit, stays on across restarts of Rubi, of the plugin and of Rubi Home and across days and weeks, and only a revoke (the panel, or t3_mandates) ends it; while Rubi is locked nothing is allowed. Rubi allows the plain, listed commands of every T3 thread of this project, each one audited and counted, with the same checks as the 2-hour trust, including builds and tests that run the project's own code with your rights. Switching to or creating a git branch is allowed only for names like agent/*; commits, merges and rebases go to the branch a session is on, which may be main. A Bot bound to a thread in the project can also start and bind threads in it, without a new approval, until you revoke it. Push and every remote git command, --force, sudo, network commands, installs, git tag, credential paths, writing outside the project or into .git, branches outside the pattern, and git rebase without --no-update-refs still ask. Because nothing ends it by itself, look at the panel from time to time and revoke what you no longer need."}}},
+						Meaning: "UNTIL REVOKED — no end time: this trust has no time or count limit, stays on across restarts of Rubi, of the plugin and of Rubi Home and across days and weeks, and only a revoke (the panel, or t3agents_mandates) ends it; while Rubi is locked nothing is allowed. Rubi allows the plain, listed commands of every T3 thread of this project, each one audited and counted, with the same checks as the 2-hour trust, including builds and tests that run the project's own code with your rights. Switching to or creating a git branch is allowed only for names like agent/*; commits, merges and rebases go to the branch a session is on, which may be main. A Bot bound to a thread in the project can also start and bind threads in it, without a new approval, until you revoke it. Push and every remote git command, --force, sudo, network commands, installs, git tag, credential paths, writing outside the project or into .git, branches outside the pattern, and git rebase without --no-update-refs still ask. Because nothing ends it by itself, look at the panel from time to time and revoke what you no longer need."}}},
 			{Kind: kindRename, Title: "Let a Bot name a T3 thread", DefaultLevel: rubiplugin.Tap, Locked: true,
 				Options: []rubiplugin.Option{{Key: "rename", Label: "Rename", Meaning: "Gives (or removes) the thread's name in Rubi. It is a label shown in thread lists and usable instead of the thread's id; it changes nothing in T3 Code"}}},
 			{Kind: kindStart, Title: "Let a Bot start a new T3 thread", DefaultLevel: rubiplugin.Strong, Locked: true,
@@ -98,7 +98,8 @@ func manifest() rubiplugin.Manifest {
 	}
 }
 
-func main() {
+// newPlugin is the plugin with every tool and handler registered; main runs it and the manifest test inspects it.
+func newPlugin() *rubiplugin.Plugin {
 	p := rubiplugin.New(manifest())
 	st := &store{}
 	sis := newSisters(st)
@@ -222,49 +223,51 @@ func main() {
 	p.OnPanel = func(ctx context.Context, h *rubiplugin.Host, op string, args json.RawMessage) (any, error) {
 		return sis.panel(ctx, h, op, args)
 	}
-	rubiplugin.AddTool(p, "t3_sessions", "List the T3 threads of the user's agent projects on their computers, with project, state, mode and which Bot each is bound to. Use it to find the thread responsible for your project before t3_bind.",
+	rubiplugin.AddTool(p, "t3agents_sessions", "List the T3 threads of the user's agent projects on their computers, with project, state, mode and which Bot each is bound to. Use it to find the thread responsible for your project before t3agents_bind.",
 		func(ctx context.Context, h *rubiplugin.Host, in sessionsIn) (any, error) {
 			return sis.sessionsTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "t3_bind", "Ask the user (one strong approval) to bind you to one T3 thread (session_id, or the name of a named thread). After that you can message it with t3_send and you get its answers (t3_reply) and questions (t3_ask). Binding again replaces your binding.",
+	rubiplugin.AddTool(p, "t3agents_bind", "Ask the user (one strong approval) to bind you to one T3 thread (session_id, or the name of a named thread). After that you can message it with t3agents_send and you get its answers (t3_reply) and questions (t3_ask). Binding again replaces your binding.",
 		func(ctx context.Context, h *rubiplugin.Host, in bindIn) (any, error) { return sis.bindTool(ctx, h, in) })
-	rubiplugin.AddTool(p, "t3_start", "Ask the user (one strong approval) to start a NEW T3 thread in one of the user's agent projects (project: its id or directory), with your task as its first message, when no thread exists for your project. On approval you are bound to the new thread automatically (t3_bound event with your bind_code) and can use t3_send. The project must be one the user added (see t3_sessions, or t3_project_add). The thread's mode is never looser than its role allows; keep the task small and specific. At most 5 requests an hour.",
+	rubiplugin.AddTool(p, "t3agents_start", "Ask the user (one strong approval) to start a NEW T3 thread in one of the user's agent projects (project: its id or directory), with your task as its first message, when no thread exists for your project. On approval you are bound to the new thread automatically (t3_bound event with your bind_code) and can use t3agents_send. The project must be one the user added (see t3agents_sessions, or t3agents_project_add). The thread's mode is never looser than its role allows; keep the task small and specific. At most 5 requests an hour.",
 		func(ctx context.Context, h *rubiplugin.Host, in startIn) (any, error) {
 			return sis.startTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "t3_project_add", "Ask the user (one strong approval) to add a folder on their computer as a project for T3 Agents, when the user tells you which folder the agents should work in. Pass dir, the folder's absolute path. Rubi Home refuses system folders, the home folder itself and private folders in it. Then the folder is a project: t3_start and t3_role_create can use it. At most 5 requests an hour.",
+	rubiplugin.AddTool(p, "t3agents_project_add", "Ask the user (one strong approval) to add a folder on their computer as a project for T3 Agents, when the user tells you which folder the agents should work in. Pass dir, the folder's absolute path. Rubi Home refuses system folders, the home folder itself and private folders in it. Then the folder is a project: t3agents_start and t3agents_role_create can use it. At most 5 requests an hour.",
 		func(ctx context.Context, h *rubiplugin.Host, in projectAddIn) (any, error) {
 			return sis.projectAddTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "t3_rename", "Give a T3 thread a name in Rubi (an alias: T3 itself is not changed), or remove it (clear). The name shows in t3_sessions and t3_bind accepts it instead of session_id. 1 to 64 plain characters, unique on the computer ignoring case, not like an id. Without session_id or session_name it names the thread you are bound to, which needs no approval; any other thread needs a tap from the user (none inside a project the user trusts if you are bound inside it).",
+	rubiplugin.AddTool(p, "t3agents_rename", "Give a T3 thread a name in Rubi (an alias: T3 itself is not changed), or remove it (clear). The name shows in t3agents_sessions and t3agents_bind accepts it instead of session_id. 1 to 64 plain characters, unique on the computer ignoring case, not like an id. Without session_id or session_name it names the thread you are bound to, which needs no approval; any other thread needs a tap from the user (none inside a project the user trusts if you are bound inside it).",
 		func(ctx context.Context, h *rubiplugin.Host, in renameIn) (any, error) {
 			return sis.renameTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "t3_trust_project", "Ask the user (one strong approval) to trust the project of the T3 thread you are bound to until the next 04:00 (at most 24 hours; pass until=revoked for no end time: it then lasts until the user revokes it, with no time or count limit, and the approval says so in capitals - ask for that only when the user wants it; default until=0400). While it lasts Rubi allows the plain, listed commands of every T3 thread of the project without asking, and you can t3_start threads in it and t3_bind to its other threads without a new approval (never one that skips permission prompts; commits, merges and rebases go to the branch the thread is on, maybe main). Push and every remote operation, --force, sudo, the network, installs, tags, writes outside the project and branches outside branch_pattern (default agent/*) still ask. Needs your bind_code.",
+	rubiplugin.AddTool(p, "t3agents_trust_project", "Ask the user (one strong approval) to trust the project of the T3 thread you are bound to until the next 04:00 (at most 24 hours; pass until=revoked for no end time: it then lasts until the user revokes it, with no time or count limit, and the approval says so in capitals - ask for that only when the user wants it; default until=0400). While it lasts Rubi allows the plain, listed commands of every T3 thread of the project without asking, and you can t3agents_start threads in it and t3agents_bind to its other threads without a new approval (never one that skips permission prompts; commits, merges and rebases go to the branch the thread is on, maybe main). Push and every remote operation, --force, sudo, the network, installs, tags, writes outside the project and branches outside branch_pattern (default agent/*) still ask. Needs your bind_code.",
 		func(ctx context.Context, h *rubiplugin.Host, in trustIn) (any, error) {
 			return sis.trustTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "t3_fork", "Fork a T3 thread: a branch of its conversation as a new idle thread, optionally named. A tap from the user for the thread you are bound to, one strong approval for any other. Then t3_bind to the fork and send it a message to start it.",
+	rubiplugin.AddTool(p, "t3agents_fork", "Fork a T3 thread: a branch of its conversation as a new idle thread, optionally named. A tap from the user for the thread you are bound to, one strong approval for any other. Then t3agents_bind to the fork and send it a message to start it.",
 		func(ctx context.Context, h *rubiplugin.Host, in forkIn) (any, error) { return sis.forkTool(ctx, h, in) })
-	rubiplugin.AddTool(p, "t3_mode", "Change the permission mode (plan, default, acceptEdits, bypassPermissions; strictest first) of a T3 thread. A stricter mode applies at once if you are bound in that project; a looser one asks the user (one strong approval), and never goes beyond what the thread's role allows.",
+	rubiplugin.AddTool(p, "t3agents_mode", "Change the permission mode (plan, default, acceptEdits, bypassPermissions; strictest first) of a T3 thread. A stricter mode applies at once if you are bound in that project; a looser one asks the user (one strong approval), and never goes beyond what the thread's role allows.",
 		func(ctx context.Context, h *rubiplugin.Host, in modeIn) (any, error) { return sis.modeTool(ctx, h, in) })
-	rubiplugin.AddTool(p, "t3_unbind", "End your binding to a T3 thread.",
+	rubiplugin.AddTool(p, "t3agents_unbind", "End your binding to a T3 thread.",
 		func(ctx context.Context, h *rubiplugin.Host, in unbindIn) (any, error) {
 			return sis.unbindTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "t3_send", "Send a short message (at most 4000 characters) to the T3 thread you are bound to; it starts or continues the thread's work, or waits in the queue when the project's limit is reached. Its answer comes as a t3_reply event; its delivery states come as t3_message events. For findings, answers to its t3_ask and small asks, not bulky tasks.",
+	rubiplugin.AddTool(p, "t3agents_send", "Send a short message (at most 4000 characters) to the T3 thread you are bound to; it starts or continues the thread's work, or waits in the queue when the project's limit is reached. Its answer comes as a t3_reply event; its delivery states come as t3_message events. For findings, answers to its t3_ask and small asks, not bulky tasks.",
 		func(ctx context.Context, h *rubiplugin.Host, in sendIn) (any, error) { return sis.sendTool(ctx, h, in) })
-	rubiplugin.AddTool(p, "t3_status", "How the T3 thread you are bound to stands (busy, idle, queued) and when a message to it would be read. Messages' own states arrive as t3_message events.",
+	rubiplugin.AddTool(p, "t3agents_status", "How the T3 thread you are bound to stands (busy, idle, queued) and when a message to it would be read. Messages' own states arrive as t3_message events.",
 		func(ctx context.Context, h *rubiplugin.Host, in statusIn) (any, error) {
 			return sis.statusTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "t3_mandates", "List the 2-hour trusts (md_…) and the project trusts (pt_…, until 04:00 or until revoked, with when each was granted and how often it was used) the user gave the agents (what Rubi allows by itself), or revoke one (revoke: its id, or \"all\"). Revoking needs no approval.",
+	rubiplugin.AddTool(p, "t3agents_mandates", "List the 2-hour trusts (md_…) and the project trusts (pt_…, until 04:00 or until revoked, with when each was granted and how often it was used) the user gave the agents (what Rubi allows by itself), or revoke one (revoke: its id, or \"all\"). Revoking needs no approval.",
 		func(_ context.Context, h *rubiplugin.Host, in mandatesIn) (any, error) {
 			return sis.mandatesTool(h, in)
 		})
 	registerRoleTools(p, sis)
-	p.Main()
+	return p
 }
+
+func main() { newPlugin().Main() }
 
 // runApproved answers the helper for an approved command and, with the trust option, gives the session
 // a mandate.

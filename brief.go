@@ -1,6 +1,6 @@
 package main
 
-// Briefs and reports. t3_start and t3_role_start take an optional typed brief; Rubi renders it the same way every
+// Briefs and reports. t3agents_start and t3agents_role_start take an optional typed brief; Rubi renders it the same way every
 // time under a fixed heading, adds fixed standing orders and asks the agent to end with a report in a fixed shape.
 // A thread's final text that contains that report reaches the Bot with the report parsed into fields. The rendered
 // text goes through the same start-text check as any first message and is shown whole in the approval.

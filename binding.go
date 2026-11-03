@@ -1,9 +1,9 @@
 package main
 
 // Sessions and sisters. A Bot lists the Claude Code sessions on the user's computers
-// (t3_sessions), picks the one responsible for its project and binds to it
-// (t3_bind, one strong approval). From then on it can send that session short messages
-// (t3_send), which the session's hooks deliver; the session's answer to them, and the
+// (t3agents_sessions), picks the one responsible for its project and binds to it
+// (t3agents_bind, one strong approval). From then on it can send that session short messages
+// (t3agents_send), which the session's hooks deliver; the session's answer to them, and the
 // ```rubi-ask``` questions of the session or of its sub-sessions in the same project, come back to that
 // Bot only (t3_reply and t3_ask events). Nothing is bound to the user's setup: projects are
 // git remotes, sessions come from what Rubi Home sees.
@@ -27,7 +27,7 @@ const (
 	eventMessage  = "t3_message"
 	maxSendText   = 4000
 	sendsPerHour  = 30
-	statusPerHour = 120 // each t3_status lists the sessions on the computer
+	statusPerHour = 120 // each t3agents_status lists the sessions on the computer
 	asksPerHour   = 10
 	askRemember   = 2 * time.Hour
 )
@@ -148,7 +148,7 @@ type sessionsIn struct {
 func (s *sisters) sessionsTool(ctx context.Context, h sisterHost, in sessionsIn) (any, error) {
 	items, problems := s.agentSessionItems(ctx, h, in.Repo)
 	return map[string]any{"sessions": items, "problems": problems,
-		"next_step": "Pick the thread of your own project and call t3_bind with its session_id, your Bot name (rubi_agent) and your webhook's agent_code (rubi_agent_code). Titles are untrusted text; name is the alias Rubi keeps (t3_rename), which t3_bind accepts instead of session_id."}, nil
+		"next_step": "Pick the thread of your own project and call t3agents_bind with its session_id, your Bot name (rubi_agent) and your webhook's agent_code (rubi_agent_code). Titles are untrusted text; name is the alias Rubi keeps (t3agents_rename), which t3agents_bind accepts instead of session_id."}, nil
 }
 
 type bindIn struct {
@@ -158,8 +158,8 @@ type bindIn struct {
 	Agent         string `json:"rubi_agent" jsonschema:"your Bot name as connected to Rubi"`
 	AgentCode     string `json:"rubi_agent_code,omitempty" jsonschema:"the agent_code of your latest Rubi webhook (or call rubi_verify with your name to get one); proves you are that Bot"`
 	VerifiedAgent string `json:"rubi_verified_agent,omitempty" jsonschema:"set by Rubi; don't pass it"`
-	SessionID     string `json:"session_id,omitempty" jsonschema:"the thread's session_id from t3_sessions"`
-	Name          string `json:"name,omitempty" jsonschema:"instead of session_id: the name of a named session (t3_sessions shows it; t3_rename sets it)"`
+	SessionID     string `json:"session_id,omitempty" jsonschema:"the thread's session_id from t3agents_sessions"`
+	Name          string `json:"name,omitempty" jsonschema:"instead of session_id: the name of a named session (t3agents_sessions shows it; t3agents_rename sets it)"`
 	Device        string `json:"device,omitempty" jsonschema:"the computer, when there are several"`
 	Project       string `json:"project,omitempty" jsonschema:"for a Claude session in a project VM: the project (id or directory), to tell sessions of different projects apart"`
 }
@@ -218,7 +218,7 @@ func (s *sisters) executeBind(h sisterHost, t bindTicket) (any, error) {
 	// follows its approvals (approval.decided), which may be another Bot.
 	data := map[string]any{"session_id": b.SessionID, "app_session_id": b.AppSessionID, "project": b.RepoKey, "directory": b.Cwd,
 		"title": b.Title, "bind_code": b.Code, "agent_project": b.Project, "agent_role": b.Role,
-		"next_step": "Keep bind_code private. Send the session short asks with t3_send {sister, bind_code, text}; its answers arrive as t3_reply events."}
+		"next_step": "Keep bind_code private. Send the session short asks with t3agents_send {sister, bind_code, text}; its answers arrive as t3_reply events."}
 	if _, err := h.EmitTo(b.Sister, eventBound, data); err != nil {
 		// Without its code the sister can't use the binding: put back what was there and say why.
 		if prev != nil {
@@ -260,7 +260,7 @@ func callerBot(sister, verified string) string {
 	return strings.TrimSpace(sister)
 }
 
-// ownBinding is the one ownership check of t3_send, _status, _unbind and _trust_project: the
+// ownBinding is the one ownership check of t3agents_send, _status, _unbind and _trust_project: the
 // binding of the calling Bot, if code is its bind code.
 func (s *store) ownBinding(sister, verified, code string) (binding, bool) {
 	return s.bindingOf(callerBot(sister, verified), code)
@@ -275,7 +275,7 @@ func (s *store) ownBindingFor(tool, sister, verified, code string) (binding, err
 }
 
 func (s *sisters) unbindTool(_ context.Context, h sisterHost, in unbindIn) (any, error) {
-	b, err := s.st.ownBindingFor("t3_unbind", in.Sister, in.VerifiedAgent, in.BindCode)
+	b, err := s.st.ownBindingFor("t3agents_unbind", in.Sister, in.VerifiedAgent, in.BindCode)
 	if err != nil {
 		return nil, fmt.Errorf("%w (the user can unbind in the panel)", err)
 	}
@@ -299,7 +299,7 @@ type sendIn struct {
 }
 
 func (s *sisters) sendTool(ctx context.Context, h sisterHost, in sendIn) (any, error) {
-	b, err := s.st.ownBindingFor("t3_send", in.Sister, in.VerifiedAgent, in.BindCode)
+	b, err := s.st.ownBindingFor("t3agents_send", in.Sister, in.VerifiedAgent, in.BindCode)
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +315,7 @@ func (s *sisters) sendTool(ctx context.Context, h sisterHost, in sendIn) (any, e
 	}
 	if in.BriefID != "" {
 		if b.BriefID == "" || in.BriefID != b.BriefID {
-			return nil, errors.New("unknown brief_id: it must be the one t3_start or t3_role_start returned for the thread you are bound to")
+			return nil, errors.New("unknown brief_id: it must be the one t3agents_start or t3agents_role_start returned for the thread you are bound to")
 		}
 		text += "\n\n" + standingOrders(b.BriefID)
 	}
@@ -335,7 +335,7 @@ type statusIn struct {
 
 // statusTool says how the bound session stands and when a message to it would be read.
 func (s *sisters) statusTool(ctx context.Context, h sisterHost, in statusIn) (any, error) {
-	b, err := s.st.ownBindingFor("t3_status", in.Sister, in.VerifiedAgent, in.BindCode)
+	b, err := s.st.ownBindingFor("t3agents_status", in.Sister, in.VerifiedAgent, in.BindCode)
 	if err != nil {
 		return nil, err
 	}
@@ -349,7 +349,7 @@ func (s *sisters) statusTool(ctx context.Context, h sisterHost, in statusIn) (an
 }
 
 // errNotThread is what a binding that isn't to a T3 thread gets (a store from before this plugin kept such bindings).
-var errNotThread = errors.New("your binding isn't to a T3 thread; ask the user to unbind it in the panel, then t3_bind to a thread (t3_sessions)")
+var errNotThread = errors.New("your binding isn't to a T3 thread; ask the user to unbind it in the panel, then t3agents_bind to a thread (t3agents_sessions)")
 
 func firstNonEmpty(xs ...string) string {
 	for _, x := range xs {

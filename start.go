@@ -1,7 +1,7 @@
 package main
 
-// Starting a thread (t3_start): the user can approve starting a new T3 thread in one of their agent projects with the
-// Bot's task as its first message (t3-agent.start); the Bot is bound to it at once (the same step as t3_bind,
+// Starting a thread (t3agents_start): the user can approve starting a new T3 thread in one of their agent projects with the
+// Bot's task as its first message (t3-agent.start); the Bot is bound to it at once (the same step as t3agents_bind,
 // executeBind) and gets t3_bound with its bind_code. The code never appears in the approval's result.
 
 import (
@@ -65,16 +65,16 @@ func checkStartText(s string) error {
 var createTimeout = 75 * time.Second
 
 type startIn struct {
-	// Who is asking: as in t3_bind, Rubi confirms the Bot's name and passes it on.
+	// Who is asking: as in t3agents_bind, Rubi confirms the Bot's name and passes it on.
 	Agent         string   `json:"rubi_agent" jsonschema:"your Bot name as connected to Rubi"`
 	AgentCode     string   `json:"rubi_agent_code,omitempty" jsonschema:"the agent_code of your latest Rubi webhook (or call rubi_verify with your name to get one); proves you are that Bot"`
 	VerifiedAgent string   `json:"rubi_verified_agent,omitempty" jsonschema:"set by Rubi; don't pass it"`
 	Device        string   `json:"device,omitempty" jsonschema:"the computer, when there are several"`
-	Cwd           string   `json:"cwd,omitempty" jsonschema:"the absolute path of your project's directory on that computer, as t3_sessions shows it (a project that already had a session, or a folder the user allowed)"`
+	Cwd           string   `json:"cwd,omitempty" jsonschema:"the absolute path of your project's directory on that computer, as t3agents_sessions shows it (a project that already had a session, or a folder the user allowed)"`
 	Project       string   `json:"project,omitempty" jsonschema:"for a computer that runs Claude in project VMs: the project (id or directory) to start the session in, instead of cwd"`
 	Mode          string   `json:"mode,omitempty" jsonschema:"for a project VM: plan, default (the default), acceptEdits or bypassPermissions; the user sees it in the approval"`
 	Task          string   `json:"task" jsonschema:"the first message of the new session (at most 2000 characters): what you want Claude to do, in your own words"`
-	Brief         *briefIn `json:"brief,omitempty" jsonschema:"an optional typed brief (goal, scope, acceptance, verify, timebox, forbidden, report): Rubi renders it under a fixed heading with fixed standing orders and asks for a report that ends STATUS / COMMIT / EVIDENCE; pass the returned brief_id to t3_send to repeat the orders"`
+	Brief         *briefIn `json:"brief,omitempty" jsonschema:"an optional typed brief (goal, scope, acceptance, verify, timebox, forbidden, report): Rubi renders it under a fixed heading with fixed standing orders and asks for a report that ends STATUS / COMMIT / EVIDENCE; pass the returned brief_id to t3agents_send to repeat the orders"`
 }
 
 type startTicket struct {
@@ -87,7 +87,7 @@ type startTicket struct {
 	Mode       string `json:"mode,omitempty"`
 	BriefID    string `json:"brief_id,omitempty"` // the brief rendered into Task, if any
 	// Role is the agent role (a Rubi Home role id) the session runs in; RoleName is for the approval's text and Name
-	// is the session's name (t3_role_start).
+	// is the session's name (t3agents_role_start).
 	Role     string `json:"role,omitempty"`
 	RoleName string `json:"role_name,omitempty"`
 	Name     string `json:"name,omitempty"`
@@ -129,7 +129,7 @@ func (s *sisters) startTool(ctx context.Context, h sisterHost, in startIn) (any,
 	case task == "":
 		return nil, errors.New("task is empty")
 	case len([]rune(task)) > maxStartTask:
-		return nil, fmt.Errorf("task is longer than %d characters: start the session with a short task and send the details with t3_send", maxStartTask)
+		return nil, fmt.Errorf("task is longer than %d characters: start the session with a short task and send the details with t3agents_send", maxStartTask)
 	case in.Project != "" && len(in.Project) > 1024:
 		return nil, errors.New("project is too long")
 	case in.Project == "" && (in.Cwd == "" || len(in.Cwd) > 1024 || !strings.HasPrefix(in.Cwd, "/") || strings.ContainsFunc(in.Cwd, func(r rune) bool { return r < ' ' || r == 0x7f })):

@@ -36,18 +36,18 @@ The plugin has no network access, no files and no secrets of its own.
   next 04:00 (at most 24 hours), or until you revoke it (no end time, said in capitals in the approval). While it
   lasts, plain listed commands of every thread of that project are allowed and the Bot may start and bind threads
   in it without a new approval, never one that skips permission prompts. Commits go to the branch a thread is on;
-  new branches only match `agent/*`. Revoke in the panel or with `t3_mandates`.
+  new branches only match `agent/*`. Revoke in the panel or with `t3agents_mandates`.
 - **Skill library.** Shared skills admitted by the library's curator can be attached to roles, following the
   latest admitted version or pinned to one. Withdrawn versions are dropped at the next check.
 - **SSH.** Rubi Home holds the SSH targets, the keys and the pinned host keys; the VMs never see them. You
   register a target with a strong approval that carries the host key fingerprint you confirmed; Bots can grant a
   registered target to a role. A command on a target registered "ask each time" is an approval of its own.
-- **Briefs and reports.** `t3_start` and `t3_role_start` take an optional typed `brief`: `goal` (required), `scope`,
+- **Briefs and reports.** `t3agents_start` and `t3agents_role_start` take an optional typed `brief`: `goal` (required), `scope`,
   `acceptance[]`, `verify[]`, `timebox`, `forbidden[]` and `report` (what the report should cover). Rubi checks the
   lengths (goal and scope 600 characters, an item 300, at most 8 items a list) and refuses control and invisible
   characters, then renders it the same way every time under a `## BRIEF br_xxxxxxxx` heading after the task, with
   fixed standing orders (stay in scope, never push to a protected branch, end with the report below). The whole first
-  message is shown in the approval. The thread is bound with that `brief_id`; passing it to `t3_send` appends the
+  message is shown in the approval. The thread is bound with that `brief_id`; passing it to `t3agents_send` appends the
   standing orders to the message, so a resumed thread gets them again. The agent is asked to end with
   `STATUS: PASS|ISSUES|BLOCKED`, `COMMIT: <sha or none>` and one or more `EVIDENCE: ...` lines. When a thread's
   final text (`t3_reply`) ends in a well-formed report, the event also carries `status`, `commit` and `evidence`
@@ -68,18 +68,18 @@ The plugin has no network access, no files and no secrets of its own.
 
 | Tool | What |
 |---|---|
-| `t3_sessions` | The threads of your agent projects, with state, mode, name and which Bot each is bound to |
-| `t3_bind` / `t3_unbind` | Bind a Bot to one thread (one strong approval), or end the binding |
-| `t3_start` | Start a thread in a project with a task and an optional `brief` (one strong approval, or none inside a trusted project; at most 5 an hour) |
-| `t3_send` / `t3_status` | Message the bound thread (at most 4000 characters, 30 an hour; `brief_id` repeats the standing orders) and see how it stands |
-| `t3_fork` / `t3_mode` / `t3_rename` | Fork a thread, change its mode, give it a name |
-| `t3_project_add` | Ask the user to add a folder as a project (one strong approval) |
-| `t3_trust_project` / `t3_mandates` | Ask for a project trust; list and revoke trusts |
-| `t3_role_create`, `_update`, `_archive`, `_unarchive`, `_skills_set`, `_skills_add`, `_skills_remove`, `_tools_set`, `_agents_set`, `_mcp_set`, `_plugins_set`, `_hosts_set`, `_ssh_grant`, `_ssh_revoke`, `_start`, `_list`, `_get`, `_history` | Roles |
+| `t3agents_sessions` | The threads of your agent projects, with state, mode, name and which Bot each is bound to |
+| `t3agents_bind` / `t3agents_unbind` | Bind a Bot to one thread (one strong approval), or end the binding |
+| `t3agents_start` | Start a thread in a project with a task and an optional `brief` (one strong approval, or none inside a trusted project; at most 5 an hour) |
+| `t3agents_send` / `t3agents_status` | Message the bound thread (at most 4000 characters, 30 an hour; `brief_id` repeats the standing orders) and see how it stands |
+| `t3agents_fork` / `t3agents_mode` / `t3agents_rename` | Fork a thread, change its mode, give it a name |
+| `t3agents_project_add` | Ask the user to add a folder as a project (one strong approval) |
+| `t3agents_trust_project` / `t3agents_mandates` | Ask for a project trust; list and revoke trusts |
+| `t3agents_role_create`, `_update`, `_archive`, `_unarchive`, `_skills_set`, `_skills_add`, `_skills_remove`, `_tools_set`, `_agents_set`, `_mcp_set`, `_plugins_set`, `_hosts_set`, `_ssh_grant`, `_ssh_revoke`, `_start`, `_list`, `_get`, `_history` | Roles |
 
 The Bot is always the one Rubi verified (`rubi_agent` with the `agent_code` of its own webhook), never a name it
-typed. A binding gives the Bot a bind code (sent to that Bot alone, in a `t3_bound` event); `t3_send`,
-`t3_status`, `t3_unbind` and `t3_trust_project` need it. A refusal says which of "no binding", "unknown code",
+typed. A binding gives the Bot a bind code (sent to that Bot alone, in a `t3_bound` event); `t3agents_send`,
+`t3agents_status`, `t3agents_unbind` and `t3agents_trust_project` need it. A refusal says which of "no binding", "unknown code",
 "superseded code" and "another Bot's code" it is. Bindings and codes are kept across restarts of the plugin.
 What a thread says comes back to its Bot as `t3_reply` (answers), `t3_ask` (questions) and
 `t3_message` (delivery states) events.
@@ -107,7 +107,7 @@ lists in `t3-setup.status`, in order, and the one button Home names for each:
    link. The code goes to Rubi Home and is never kept or audited.
 7. **Self-test**, per project.
 
-The project folders are listed apart, with Remove; a Bot adds one when you ask it (`t3_project_add`). The page
+The project folders are listed apart, with Remove; a Bot adds one when you ask it (`t3agents_project_add`). The page
 refreshes every 3 seconds while a step runs or a sign-in waits, and not otherwise.
 
 ## Limits

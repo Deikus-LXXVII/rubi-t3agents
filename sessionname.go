@@ -1,7 +1,7 @@
 package main
 
-// Session names (t3_rename). A name is an alias Rubi keeps for a T3 thread on a computer (the runner's own title is
-// set beside it): it shows in t3_sessions next to the title, and t3_bind accepts it instead of a thread id.
+// Session names (t3agents_rename). A name is an alias Rubi keeps for a T3 thread on a computer (the runner's own title is
+// set beside it): it shows in t3agents_sessions next to the title, and t3agents_bind accepts it instead of a thread id.
 
 import (
 	"context"
@@ -241,7 +241,7 @@ type renameIn struct {
 	Agent         string `json:"rubi_agent" jsonschema:"your Bot name as connected to Rubi"`
 	AgentCode     string `json:"rubi_agent_code,omitempty" jsonschema:"the agent_code of your latest Rubi webhook (or call rubi_verify with your name to get one); proves you are that Bot"`
 	VerifiedAgent string `json:"rubi_verified_agent,omitempty" jsonschema:"set by Rubi; don't pass it"`
-	SessionID     string `json:"session_id,omitempty" jsonschema:"the session to name: the thread's session_id from t3_sessions. Leave out (with session_name) for the session you are bound to"`
+	SessionID     string `json:"session_id,omitempty" jsonschema:"the session to name: the thread's session_id from t3agents_sessions. Leave out (with session_name) for the session you are bound to"`
 	SessionName   string `json:"session_name,omitempty" jsonschema:"the session's current name, instead of session_id"`
 	Device        string `json:"device,omitempty" jsonschema:"the computer, when there are several"`
 	Project       string `json:"project,omitempty" jsonschema:"for a Claude session in a project VM: its project (id or directory)"`
@@ -375,7 +375,7 @@ func (s *sisters) renameTool(ctx context.Context, h sisterHost, in renameIn) (an
 	// 2. A session inside a project the user trusts, for a Bot bound inside it.
 	if mayAlone {
 		if pt := s.agentProjectCovering(d.ID, sister, project); pt != nil {
-			h.Audit(auditMandateAll, map[string]any{"mandate": pt.ID, "project": pt.Root, "device": d.ID, "sister": sister, "action": "t3_rename",
+			h.Audit(auditMandateAll, map[string]any{"mandate": pt.ID, "project": pt.Root, "device": d.ID, "sister": sister, "action": "t3agents_rename",
 				"session": sess.SessionID, "directory": sess.Cwd, "uses": pt.Uses})
 			res, err := s.executeRename(ctx, h, t, "bot", "project trust "+pt.ID, all)
 			if m, ok := res.(map[string]any); ok && err == nil {
@@ -462,7 +462,7 @@ func (s *sisters) executeRename(ctx context.Context, h sisterHost, t renameTicke
 	}
 	h.Audit(auditRenamed, map[string]any{"device": t.Device, "session": t.SessionID, "old": oneLine(old.Name, maxNameRunes), "new": name, "by": by, "sister": t.Sister, "approval": why})
 	out := map[string]any{"renamed": true, "session_id": t.SessionID, "name": name,
-		"next_step": "t3_sessions now shows this name, and t3_bind accepts it as name."}
+		"next_step": "t3agents_sessions now shows this name, and t3agents_bind accepts it as name."}
 	if old.Name != "" {
 		out["previous_name"] = old.Name
 	}
@@ -477,9 +477,9 @@ func (s *sisters) noThread(h sisterHost, device, id, name string) error {
 	case id != "" && name != "":
 		return errors.New("pass session_id or name, not both")
 	case id == "" && name == "":
-		return errors.New("pass session_id, or the name of a named session (t3_sessions shows both)")
+		return errors.New("pass session_id, or the name of a named session (t3agents_sessions shows both)")
 	case id != "":
-		return errors.New("no such T3 thread on your computers (list them with t3_sessions)")
+		return errors.New("no such T3 thread on your computers (list them with t3agents_sessions)")
 	}
 	devID := ""
 	if device != "" {
@@ -493,7 +493,7 @@ func (s *sisters) noThread(h sisterHost, device, id, name string) error {
 	if len(found) == 0 {
 		return fmt.Errorf("no session is named %q%s", oneLine(name, maxNameRunes), s.knownNames(devID))
 	}
-	return fmt.Errorf("the session named %q isn't there any more (list sessions with t3_sessions)", oneLine(name, maxNameRunes))
+	return fmt.Errorf("the session named %q isn't there any more (list sessions with t3agents_sessions)", oneLine(name, maxNameRunes))
 }
 
 // nameOnSeveralComputers is the refusal for a name used on several computers when no computer was named.
@@ -526,7 +526,7 @@ func (s *sisters) knownNames(device string) string {
 	}
 	slices.Sort(names)
 	if len(names) == 0 {
-		return " (no session has a name yet; use t3_rename or the Rubi panel)"
+		return " (no session has a name yet; use t3agents_rename or the Rubi panel)"
 	}
 	if len(names) > 10 {
 		names = append(names[:10], "…")

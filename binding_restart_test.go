@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// boundTo is what t3_sessions says the thread cli-1 is bound to.
+// boundTo is what t3agents_sessions says the thread cli-1 is bound to.
 func boundTo(t *testing.T, f *fakeHost, s *sisters) string {
 	t.Helper()
 	res, err := s.sessionsTool(context.Background(), f, sessionsIn{})
@@ -63,7 +63,7 @@ func TestBindingSurvivesARestartAndTheListMatches(t *testing.T) {
 	}
 	s = restart()
 	_, err := s.sendTool(ctx, f, sendIn{VerifiedAgent: "Alice", BindCode: code, Text: "hi"})
-	if err == nil || !strings.Contains(err.Error(), "t3_send: superseded bind_code") || !strings.Contains(err.Error(), "replaced") {
+	if err == nil || !strings.Contains(err.Error(), "t3agents_send: superseded bind_code") || !strings.Contains(err.Error(), "replaced") {
 		t.Errorf("old code: %v", err)
 	}
 	if _, err := s.sendTool(ctx, f, sendIn{VerifiedAgent: "Alice", BindCode: newCode, Text: "hi"}); err != nil {
@@ -81,10 +81,10 @@ func TestBindingSurvivesARestartAndTheListMatches(t *testing.T) {
 		in   statusIn
 		want string
 	}{
-		"missing code":  {statusIn{VerifiedAgent: "Alice"}, "t3_status: missing bind_code"},
-		"unknown code":  {statusIn{VerifiedAgent: "Alice", BindCode: "bc_nope"}, "t3_status: unknown bind_code"},
-		"another Bot's": {statusIn{VerifiedAgent: "Bob", BindCode: newCode}, "t3_status: bind_code of another Bot"},
-		"no binding":    {statusIn{VerifiedAgent: "Bob", BindCode: "bc_nope"}, "t3_status: not bound: Bob has no binding"},
+		"missing code":  {statusIn{VerifiedAgent: "Alice"}, "t3agents_status: missing bind_code"},
+		"unknown code":  {statusIn{VerifiedAgent: "Alice", BindCode: "bc_nope"}, "t3agents_status: unknown bind_code"},
+		"another Bot's": {statusIn{VerifiedAgent: "Bob", BindCode: newCode}, "t3agents_status: bind_code of another Bot"},
+		"no binding":    {statusIn{VerifiedAgent: "Bob", BindCode: "bc_nope"}, "t3agents_status: not bound: Bob has no binding"},
 	} {
 		if _, err := s.statusTool(ctx, f, c.in); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v", name, err)

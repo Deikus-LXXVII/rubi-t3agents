@@ -326,7 +326,7 @@ func TestReplyEventCarriesTheParsedReport(t *testing.T) {
 			t.Errorf("%s: raw text missing", name)
 		}
 	}
-	// evidence is untrusted text in the manifest; the events are named t3_*.
+	// evidence is untrusted text in the manifest; the events are named t3agents_*.
 	m := manifest()
 	ev, ok := m.Event(eventReply)
 	if !ok || !strings.Contains(strings.Join(ev.Untrusted, ","), "evidence") {
