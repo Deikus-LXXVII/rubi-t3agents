@@ -363,9 +363,13 @@ func firstNonEmpty(xs ...string) string {
 // clockHook lets the end-to-end test move Rubi's clock (rubie2e builds only; nil in a release).
 var clockHook func(now time.Time) time.Time
 
-// wallClock is the plugin's clock.
+// wallClock is the plugin's clock: wall time without Go's monotonic reading. Trust and mandate expiries, binding
+// and note ages and the rate-limit windows are times of day (shown to the user, saved, compared with times from
+// Rubi); the monotonic clock stops while the computer sleeps or hibernates, so a plain time.Now() would let a
+// trust outlive its shown expiry by the length of the sleep. Use wallClock (s.now), never time.Now(), for any
+// stored time; wallclock_guard_test.go enforces it.
 func wallClock() time.Time {
-	t := time.Now()
+	t := time.Now().Round(0)
 	if clockHook != nil {
 		t = clockHook(t)
 	}
