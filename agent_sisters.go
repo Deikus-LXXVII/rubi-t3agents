@@ -270,9 +270,104 @@ func (s *sisters) startAgent(ctx context.Context, h sisterHost, sister string, d
 			preview["replaces"] = b.Title + " (" + b.SessionID + ")"
 		}
 	}
-	return h.Submit(ctx, rubiplugin.Request{Kind: kindStart,
+	req := rubiplugin.Request{Kind: kindStart,
 		Summary: "Start Claude in " + oneLine(firstNonEmpty(proj.Dir, proj.ID), 50) + " on " + d.Name + " for " + sister + ": " + oneLine(task, 80),
-		Preview: preview, Payload: t})
+		Preview: preview, Payload: t}
+	if in.TrustProject {
+		s.startTrustItems(&req, &t, sister, d, proj)
+	}
+	return h.Submit(ctx, req)
+}
+
+// startTrustItems turns a start approval into one approval with two items: the start (with the binding it ends in) and
+// a project trust until the next 04:00. The trust item carries what the single trust approval shows; the trust that
+// lasts until revoked is not offered this way. An item the user leaves unticked is not done.
+func (s *sisters) startTrustItems(req *rubiplugin.Request, t *startTicket, sister string, d rubiplugin.HomeDevice, proj agentProject) {
+	// The start must not die with the trust: when the trust can't be offered the approval is the start alone, with a note.
+	note := func(why string) {
+		if p, ok := req.Preview.(map[string]any); ok {
+			p["trust_note"] = "The project trust you asked for was not offered: " + why
+		}
+	}
+	if !s.allow("trust|"+strings.ToLower(sister), trustsPerHour) {
+		note(fmt.Sprintf("at most %d project trust requests an hour", trustsPerHour))
+		return
+	}
+	o, err := s.agentOffer(proj.ID, proj.Dir, d.Name, "", false)
+	if err != nil {
+		note(oneLine(err.Error(), 200))
+		return
+	}
+	t.Trust = &trustTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, Offer: o}
+	tp := map[string]any{"bot": sister, "computer": d.Name, "project": proj.Dir, "project_id": proj.ID, "project_root": o.Root,
+		"branches": o.Pattern, "until": s.untilText(o.Unlimited, o.Expires), "what_it_allows": s.trustMeaning(o, false),
+		"needs_the_start": "Granted only if the session item is ticked too and the session starts."}
+	if old := s.st.projectTrustOf(d.ID, o.Root, proj.ID, s.now()); old != nil {
+		tp["replaces"] = fmt.Sprintf("the trust %s (%s, %d commands used, granted %s)", old.ID, s.trustEnd(*old), old.Uses, ageText(old.Issued, s.now()))
+	}
+	where := oneLine(firstNonEmpty(proj.Dir, proj.ID), 60)
+	until := s.expiryText(o)
+	req.Items = []rubiplugin.Item{
+		{Key: itemStart, Label: "Start the session: " + oneLine(req.Summary, 150), Preview: req.Preview},
+		{Key: itemTrust, Label: "Trust the project " + where + " until " + until, Preview: tp},
+	}
+	req.Summary += " and trust the project " + where + " until " + until
+	req.Preview = map[string]any{
+		"also_trusts_the_project": "This also trusts the project: the listed plain commands of every thread in it run without asking until " + until + ". Untick 'Trust the project' if you only want the session.",
+		"bot":                     sister, "computer": d.Name, "project": proj.Dir,
+		"what_it_does": "Two items: start a new session, and trust the project until the next 04:00. Tick the ones you want; an unticked item is not done. The trust is granted only together with the session.",
+		"items":        []string{itemStart, itemTrust}}
+	req.Options = []rubiplugin.Option{{Key: "start", Label: "Start", Meaning: "Does the ticked items: starts a new T3 thread in a role VM with the Bot's task as its first message and binds the Bot to it; trusts the project until the next 04:00 as the trust item says"}}
+	req.Payload = *t
+}
+
+const (
+	itemStart = "start"
+	itemTrust = "trust"
+)
+
+// executeStartTrust runs a start approval that was a batch: the ticked items are done, the others are not. An option that
+// names no items does neither.
+func (s *sisters) executeStartTrust(ctx context.Context, h sisterHost, option string, t startTicket) (any, error) {
+	_, chosen := splitBatchOption(option)
+	pick := map[string]bool{}
+	for _, k := range chosen {
+		if k != itemStart && k != itemTrust {
+			return nil, errors.New("unknown item in the selection; nothing was done")
+		}
+		pick[k] = true
+	}
+	if len(pick) == 0 {
+		return nil, errors.New("no item was chosen; nothing was done")
+	}
+	if pick[itemTrust] && !pick[itemStart] {
+		return nil, errors.New("the project trust is granted only together with the session: tick the session item too. Nothing was done")
+	}
+	tt := *t.Trust
+	t.Trust = nil
+	out := map[string]any{}
+	if pick[itemStart] {
+		res, err := s.executeStart(ctx, h, t)
+		if err != nil {
+			return nil, err // a failed start grants no trust
+		}
+		if m, ok := res.(map[string]any); ok {
+			out = m
+		}
+	} else {
+		out["started"] = false
+		out["start"] = "not ticked: no session was started"
+	}
+	if pick[itemTrust] {
+		if pt, err := s.executeTrust(h, tt); err != nil {
+			out["trust_error"] = err.Error()
+		} else {
+			out["trust"] = pt
+		}
+	} else {
+		out["trust"] = "not ticked: the project was not trusted"
+	}
+	return out, nil
 }
 
 func (s *sisters) executeStartAgent(ctx context.Context, h sisterHost, t startTicket) (any, error) {

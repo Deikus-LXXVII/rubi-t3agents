@@ -20,6 +20,8 @@ var PublisherKey = ""
 const (
 	kindRun  = "t3agents.run"      // any command: passkey or password in the Rubi panel
 	kindSafe = "t3agents.run_safe" // a read-only command on the short list (classify)
+	// kindRunBatch is several run approvals of one thread asked at once, an item each (agent_batch.go).
+	kindRunBatch = "t3agents.run_batch"
 	// eventNeeded tells the agent to send you the approval link.
 	eventNeeded = "approval_needed"
 )
@@ -48,6 +50,7 @@ func manifest() rubiplugin.Manifest {
 		Entry:   "t3agents",
 		Actions: []rubiplugin.Action{
 			{Kind: kindRun, Title: "Run a command in a T3 thread", DefaultLevel: rubiplugin.Strong, Locked: true, Options: trust},
+			{Kind: kindRunBatch, Title: "Run several commands of one T3 thread (you tick the ones to allow)", DefaultLevel: rubiplugin.Strong, Locked: true, Options: trust},
 			// Read-only commands: a tap on the passkey is enough, no Face ID. (Chat would need the agent to
 			// show the buttons.) You can change it in the panel.
 			{Kind: kindSafe, Title: "Run a read-only command in a T3 thread (ls, cat, pwd, git status/diff/log)",
@@ -112,6 +115,7 @@ func newPlugin() *rubiplugin.Plugin {
 		ctx, cancel := context.WithCancel(context.Background())
 		stop, done = cancel, make(chan struct{})
 		w := newWatcher(h, sis)
+		w.batchWindow = askBatchWindow
 		go func() {
 			defer close(done)
 			w.run(ctx)
@@ -126,6 +130,9 @@ func newPlugin() *rubiplugin.Plugin {
 	}
 	p.OnExecute(kindRun, func(ctx context.Context, h *rubiplugin.Host, option string, payload json.RawMessage) (any, error) {
 		return runApproved(ctx, h, sis, option, payload)
+	})
+	p.OnExecute(kindRunBatch, func(ctx context.Context, h *rubiplugin.Host, option string, payload json.RawMessage) (any, error) {
+		return runBatchApproved(ctx, h, sis, option, payload)
 	})
 	p.OnExecute(kindSafe, func(ctx context.Context, h *rubiplugin.Host, _ string, payload json.RawMessage) (any, error) {
 		return allow(ctx, h, payload)
@@ -144,10 +151,13 @@ func newPlugin() *rubiplugin.Plugin {
 		}
 		return sis.executeTrust(h, t)
 	})
-	p.OnExecute(kindStart, func(ctx context.Context, h *rubiplugin.Host, _ string, payload json.RawMessage) (any, error) {
+	p.OnExecute(kindStart, func(ctx context.Context, h *rubiplugin.Host, option string, payload json.RawMessage) (any, error) {
 		var t startTicket
 		if err := json.Unmarshal(payload, &t); err != nil {
 			return nil, fmt.Errorf("bad payload")
+		}
+		if t.Trust != nil {
+			return sis.executeStartTrust(ctx, h, option, t)
 		}
 		return sis.executeStart(ctx, h, t)
 	})
@@ -206,7 +216,11 @@ func newPlugin() *rubiplugin.Plugin {
 		}
 		return sis.executeRoleChange(ctx, h, t)
 	})
-	p.OnExecute(kindSSHTarget, func(ctx context.Context, h *rubiplugin.Host, _ string, payload json.RawMessage) (any, error) {
+	p.OnExecute(kindSSHTarget, func(ctx context.Context, h *rubiplugin.Host, option string, payload json.RawMessage) (any, error) {
+		var bt sshBatchTicket
+		if json.Unmarshal(payload, &bt) == nil && len(bt.Targets) > 0 {
+			return sis.executeSSHRegisterAll(ctx, h, option, bt)
+		}
 		var t sshTicket
 		if err := json.Unmarshal(payload, &t); err != nil {
 			return nil, fmt.Errorf("bad payload")
@@ -278,18 +292,23 @@ func runApproved(ctx context.Context, h sisterHost, s *sisters, option string, p
 	}
 	var t ticket
 	_ = json.Unmarshal(payload, &t)
+	return sessionTrust(h, s, t), nil
+}
+
+// sessionTrust gives the session a 2-hour mandate for an approval that chose the trust option.
+func sessionTrust(h sisterHost, s *sisters, t ticket) map[string]any {
 	if t.SessionID == "" || !within(t.Cwd, t.Cwd) {
-		return map[string]any{"allowed": true, "trusted": false, "why": "the request had no session or directory"}, nil
+		return map[string]any{"allowed": true, "trusted": false, "why": "the request had no session or directory"}
 	}
 	now := s.now().UTC()
 	m := mandate{ID: newID("md_"), Device: t.Device, DeviceName: t.DeviceName, SessionID: t.SessionID, Cwd: t.Cwd,
 		Issued: now, Expires: now.Add(mandateTTL), MaxUses: mandateMaxUses, Project: t.AgentProject}
 	if err := s.st.issue(m, now); err != nil {
 		h.Logf("saving a mandate: %v", err)
-		return map[string]any{"allowed": true, "trusted": false, "why": "couldn't save it"}, nil
+		return map[string]any{"allowed": true, "trusted": false, "why": "couldn't save it"}
 	}
 	h.Audit("mandate_issued", map[string]any{"mandate": m.ID, "device": m.Device, "session": m.SessionID, "directory": m.Cwd, "expires": m.Expires})
-	return map[string]any{"allowed": true, "trusted": true, "mandate": m.ID, "expires": m.Expires}, nil
+	return map[string]any{"allowed": true, "trusted": true, "mandate": m.ID, "expires": m.Expires}
 }
 
 // allow answers Rubi Home once you approved: the agent runs the command its question named.

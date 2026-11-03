@@ -56,6 +56,14 @@ The plugin has no network access, no files and no secrets of its own.
   SSH command) reach you as approvals; Rubi Home answers the thread only after your approval. A tap approves a
   read-only command (`ls`, `cat`, `git status`); everything else is a strong approval you can't lower.
   Anything that isn't an approval (deny, cancel, expiry, Rubi locked) is a deny with a reason the agent sees.
+- **Batched approvals.** Run approvals of one thread that arrive within half a second of each other become one
+  approval with an item per command, each with the details its own approval would show. You tick the commands to
+  allow; each ticked one runs once and every unticked one is denied. The 2-hour trust option is offered when no item
+  is one that no trust may cover. Asks of different threads are never merged; one ask alone is the approval it always
+  was. Several SSH targets being added can be confirmed in one approval ("Check all host keys" on the SSH targets
+  page, an item per target with its own host key fingerprint). `t3agents_start` and `t3agents_role_start` take
+  `trust_project`: one approval with two items, the start and a project trust until the next 04:00 (granted only with the start; never the trust
+  until revoked); an unticked item is not done.
 
 ## Permissions
 
@@ -70,7 +78,7 @@ The plugin has no network access, no files and no secrets of its own.
 |---|---|
 | `t3agents_sessions` | The threads of your agent projects, with state, mode, name and which Bot each is bound to |
 | `t3agents_bind` / `t3agents_unbind` | Bind a Bot to one thread (one strong approval), or end the binding |
-| `t3agents_start` | Start a thread in a project with a task and an optional `brief` (one strong approval, or none inside a trusted project; at most 5 an hour) |
+| `t3agents_start` | Start a thread in a project with a task and an optional `brief` (one strong approval, or none inside a trusted project; at most 5 an hour); `trust_project` adds a 04:00 project trust as a second item of the same approval |
 | `t3agents_send` / `t3agents_status` | Message the bound thread (at most 4000 characters, 30 an hour; `brief_id` repeats the standing orders) and see how it stands |
 | `t3agents_fork` / `t3agents_mode` / `t3agents_rename` | Fork a thread, change its mode, give it a name |
 | `t3agents_project_add` | Ask the user to add a folder as a project (one strong approval) |

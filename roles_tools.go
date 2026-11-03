@@ -270,10 +270,11 @@ type roleSSHIn struct {
 
 type roleStartIn struct {
 	roleWho
-	Role   string   `json:"role"`
-	Prompt string   `json:"prompt" jsonschema:"the first message of the new session (at most 2000 characters)"`
-	Name   string   `json:"name,omitempty" jsonschema:"a name for the session (as t3agents_rename)"`
-	Brief  *briefIn `json:"brief,omitempty" jsonschema:"an optional typed brief, as for t3agents_start"`
+	Role         string   `json:"role"`
+	Prompt       string   `json:"prompt" jsonschema:"the first message of the new session (at most 2000 characters)"`
+	Name         string   `json:"name,omitempty" jsonschema:"a name for the session (as t3agents_rename)"`
+	Brief        *briefIn `json:"brief,omitempty" jsonschema:"an optional typed brief, as for t3agents_start"`
+	TrustProject bool     `json:"trust_project,omitempty" jsonschema:"also ask the user, in the same approval, to trust the project until the next 04:00 (as t3agents_trust_project does); the user can leave that item unticked. Ignored when the project is already trusted for you"`
 }
 
 type roleListIn struct {

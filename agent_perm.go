@@ -244,6 +244,11 @@ func (w *watcher) agentApprove(ctx context.Context, d rubiplugin.HomeDevice, it 
 	case kind == kindRun:
 		req.Options = manifestRunOptions()
 	}
+	if kind == kindRun && it.SessionID != "" && w.batchWindow > 0 && batchable(tool, detail) {
+		// Asks of one session that arrive together become one approval with an item each (agent_batch.go).
+		w.collectRun(ctx, d, &pendingRun{it: it, req: req, detail: detail, tool: tool, always: always, ticket: t, preview: preview, deny: deny})
+		return
+	}
 	w.submitAgent(ctx, d, it, req, detail, deny)
 }
 

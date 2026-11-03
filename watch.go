@@ -23,6 +23,8 @@ type request struct {
 	ExpiresAt   time.Time `json:"expires_at"`
 	// Project is set for a request from a Rubi Home agent project (t3-agent); never by the hook helper.
 	Project string `json:"project,omitempty"`
+	// denyFailed: an approval that ends as "failed" denies (a batch whose execute step failed before it answered).
+	denyFailed bool
 }
 
 // ticket is the approval's payload: which request on which computer the approval answers.
@@ -60,6 +62,7 @@ const (
 	msgDenied    = "you denied this command in Rubi."
 	msgCancelled = "the approval was cancelled in Rubi (or Rubi was locked)."
 	msgExpired   = "the approval expired in Rubi."
+	msgFailed    = "the approval failed"
 )
 
 type watcher struct {
@@ -69,6 +72,11 @@ type watcher struct {
 	mu      sync.Mutex
 	polling map[string]bool
 	wg      sync.WaitGroup
+	// batchWindow is how long a session's first run approval waits for others of the same session (0: none, each ask
+	// is its own approval); groups are the asks collected so far (agent_batch.go).
+	batchWindow time.Duration
+	bmu         sync.Mutex
+	groups      map[string]*askGroup
 }
 
 func newWatcher(h host, s *sisters) *watcher {
@@ -154,7 +162,11 @@ func (w *watcher) follow(ctx context.Context, r request, id string, deny func(st
 		switch st.State {
 		case "pending", "executing":
 			continue
-		case "executed", "failed": // execute answered the helper (or found it no longer waiting)
+		case "executed": // execute answered the helper (or found it no longer waiting)
+		case "failed":
+			if r.denyFailed {
+				deny(msgFailed)
+			}
 		case "denied":
 			deny(msgDenied)
 		case "cancelled":

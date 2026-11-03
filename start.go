@@ -75,6 +75,7 @@ type startIn struct {
 	Mode          string   `json:"mode,omitempty" jsonschema:"for a project VM: plan, default (the default), acceptEdits or bypassPermissions; the user sees it in the approval"`
 	Task          string   `json:"task" jsonschema:"the first message of the new session (at most 2000 characters): what you want Claude to do, in your own words"`
 	Brief         *briefIn `json:"brief,omitempty" jsonschema:"an optional typed brief (goal, scope, acceptance, verify, timebox, forbidden, report): Rubi renders it under a fixed heading with fixed standing orders and asks for a report that ends STATUS / COMMIT / EVIDENCE; pass the returned brief_id to t3agents_send to repeat the orders"`
+	TrustProject  bool     `json:"trust_project,omitempty" jsonschema:"also ask the user, in the same approval, to trust the project until the next 04:00 (as t3agents_trust_project does); the user can leave that item unticked. Ignored when the project is already trusted for you"`
 }
 
 type startTicket struct {
@@ -94,6 +95,8 @@ type startTicket struct {
 	// RoleVersion is the version of the role the user was shown (and its mode, tools and hosts with it): the session
 	// starts only if the role is still at that version.
 	RoleVersion int `json:"role_version,omitempty"`
+	// Trust is set when the approval is a batch of the start and a project trust (startTrustItems).
+	Trust *trustTicket `json:"trust,omitempty"`
 }
 
 func (s *sisters) pickDevice(h sisterHost, ref string) (rubiplugin.HomeDevice, error) {

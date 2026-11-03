@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
@@ -349,7 +350,11 @@ func (s *sisters) sshPage(ctx context.Context, h sisterHost, p panelPage) (any, 
 			for _, dr := range drafts {
 				di = append(di, sshDraftRow(dr))
 			}
-			sections = append(sections, map[string]any{"title": prefix + "Targets being added", "note": "Nothing is registered until you confirm the host key in a strong approval. Choose the allowed commands and whether each command asks you, then press Check the host key.", "empty": "", "items": di})
+			sec := map[string]any{"title": prefix + "Targets being added", "note": "Nothing is registered until you confirm the host key in a strong approval. Choose the allowed commands and whether each command asks you, then press Check the host key.", "empty": "", "items": di}
+			if len(drafts) > 1 {
+				sec["actions"] = []map[string]any{{"label": "Check all host keys", "op": "ssh_confirm_all", "args": panelPage{Device: d.ID}.args()}}
+			}
+			sections = append(sections, sec)
 		}
 	}
 	if len(sections) == 0 {
@@ -468,6 +473,8 @@ func (s *sisters) panelSSH(ctx context.Context, h sisterHost, op, device, item s
 		return nil, err
 	}
 	switch op {
+	case "ssh_confirm_all":
+		return s.askSSHRegisterAll(ctx, h, d)
 	case "ssh_add":
 		if text == nil {
 			return nil, errors.New("this Rubi's panel can't ask for text; update Rubi")
@@ -545,9 +552,22 @@ type sshTicket struct {
 // askSSHRegister reads the server's host key (Rubi Home dials from the computer, no login), compares it with the one
 // the user typed if they did, and asks for the strong approval that carries the fingerprint.
 func (s *sisters) askSSHRegister(ctx context.Context, h sisterHost, dev rubiplugin.HomeDevice, name string, expect *string) (any, error) {
+	t, preview, err := s.prepareSSHRegister(ctx, h, dev, name, expect)
+	if err != nil {
+		return nil, err
+	}
+	return h.Submit(ctx, rubiplugin.Request{Kind: kindSSHTarget, Summary: sshSummary(t), Preview: preview, Payload: t})
+}
+
+func sshSummary(t sshTicket) string {
+	return "Register the SSH target " + t.Name + " (" + t.User + "@" + t.Host + ":" + strconv.Itoa(t.Port) + "), host key " + t.Fingerprint
+}
+
+// prepareSSHRegister scans the draft's server and builds what the strong approval shows and carries.
+func (s *sisters) prepareSSHRegister(ctx context.Context, h sisterHost, dev rubiplugin.HomeDevice, name string, expect *string) (sshTicket, map[string]any, error) {
 	var dr *sshDraft
 	if err := s.draftEdit(dev.ID, name, func(x *sshDraft) error { c := *x; c.Allowed = slices.Clone(x.Allowed); dr = &c; return nil }); err != nil {
-		return nil, err
+		return sshTicket{}, nil, err
 	}
 	var scan struct {
 		Fingerprint string `json:"fingerprint"`
@@ -557,15 +577,15 @@ func (s *sisters) askSSHRegister(ctx context.Context, h sisterHost, dev rubiplug
 	defer cancel()
 	if err := h.HomeCall(sctx, dev.ID, opSSHScan, map[string]any{"host": dr.Host, "port": dr.Port}, &scan); err != nil {
 		if isUnknownOp(err) {
-			return nil, errors.New("this computer's Rubi Home doesn't do SSH targets yet; update it")
+			return sshTicket{}, nil, errors.New("this computer's Rubi Home doesn't do SSH targets yet; update it")
 		}
-		return nil, fmt.Errorf("couldn't read the server's host key: %s", oneLine(err.Error(), 160))
+		return sshTicket{}, nil, fmt.Errorf("couldn't read the server's host key: %s", oneLine(err.Error(), 160))
 	}
 	if !sshFPRE.MatchString(scan.Fingerprint) || hiddenChars(scan.KeyType) || len(scan.KeyType) > 40 {
-		return nil, errors.New("Rubi Home answered with a host key fingerprint that doesn't look right")
+		return sshTicket{}, nil, errors.New("Rubi Home answered with a host key fingerprint that doesn't look right")
 	}
 	if expect != nil && strings.TrimSpace(*expect) != "" && strings.TrimSpace(*expect) != scan.Fingerprint {
-		return nil, fmt.Errorf("the server's host key is %s, not the %s you typed; nothing was registered", scan.Fingerprint, clipOne(*expect, 60))
+		return sshTicket{}, nil, fmt.Errorf("the server's host key is %s, not the %s you typed; nothing was registered", scan.Fingerprint, clipOne(*expect, 60))
 	}
 	t := sshTicket{Device: dev.ID, DeviceName: dev.Name, Name: dr.Name, Host: dr.Host, Port: dr.Port, User: dr.User, Fingerprint: scan.Fingerprint,
 		KeyType: scan.KeyType, Allowed: dr.Allowed, AskEachTime: dr.Ask, Reuse: dr.Reuse}
@@ -583,9 +603,96 @@ func (s *sisters) askSSHRegister(ctx context.Context, h sisterHost, dev rubiplug
 	if expect != nil && strings.TrimSpace(*expect) != "" {
 		preview["matches_the_fingerprint_you_typed"] = true
 	}
-	return h.Submit(ctx, rubiplugin.Request{Kind: kindSSHTarget,
-		Summary: "Register the SSH target " + t.Name + " (" + t.User + "@" + t.Host + ":" + strconv.Itoa(t.Port) + "), host key " + t.Fingerprint,
-		Preview: preview, Payload: t})
+	return t, preview, nil
+}
+
+// maxSSHBatch bounds one approval's targets. Each registration may take up to 60 s and they run side by side, so
+// the batch takes about as long as one; I found no execute limit in core to measure a longer serial run against.
+const maxSSHBatch = 4
+
+// sshBatchTicket is the payload of one approval for several targets: a ticket each, keyed by the target's name.
+type sshBatchTicket struct {
+	Device  string      `json:"device"`
+	Targets []sshTicket `json:"targets"`
+}
+
+// askSSHRegisterAll reads the host key of every draft of the computer and asks for one strong approval with an item
+// for each target. Each item carries what the single approval shows, the fingerprint included, and only the ticked
+// ones are registered. If any server can't be read nothing is asked.
+func (s *sisters) askSSHRegisterAll(ctx context.Context, h sisterHost, dev rubiplugin.HomeDevice) (any, error) {
+	drafts := s.draftsOf(dev.ID)
+	if len(drafts) < 2 {
+		return nil, errors.New("this needs two or more targets being added; use Check the host key on the one")
+	}
+	if len(drafts) > maxSSHBatch {
+		return nil, fmt.Errorf("at most %d targets in one approval: register or discard some first", maxSSHBatch)
+	}
+	bt := sshBatchTicket{Device: dev.ID}
+	var items []rubiplugin.Item
+	var names []string
+	for _, dr := range drafts {
+		t, preview, err := s.prepareSSHRegister(ctx, h, dev, dr.Name, nil)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w; nothing was asked", dr.Name, err)
+		}
+		bt.Targets = append(bt.Targets, t)
+		items = append(items, rubiplugin.Item{Key: t.Name, Label: oneLine(sshSummary(t), 200), Preview: preview})
+		names = append(names, t.Name)
+	}
+	preview := map[string]any{"computer": dev.Name, "targets": names,
+		"what_it_does": "Registers the ticked targets on that computer, each as its own item below shows (host key fingerprint included): compare each fingerprint with the one the server itself shows before you approve. Targets you leave unticked stay in the list of targets being added."}
+	return h.Submit(ctx, rubiplugin.Request{Kind: kindSSHTarget, Summary: fmt.Sprintf("Register %d SSH targets on %s: %s", len(names), dev.Name, oneLine(strings.Join(names, ", "), 120)),
+		Preview: preview, Items: items, Payload: bt})
+}
+
+// executeSSHRegisterAll registers the ticked targets of a batch. An option that names no items registers nothing.
+func (s *sisters) executeSSHRegisterAll(ctx context.Context, h sisterHost, option string, bt sshBatchTicket) (any, error) {
+	if bt.Device == "" || len(bt.Targets) == 0 || len(bt.Targets) > maxSSHBatch {
+		return nil, errors.New("bad payload")
+	}
+	seen := map[string]bool{}
+	for _, t := range bt.Targets {
+		if t.Device != bt.Device || seen[t.Name] {
+			return nil, errors.New("bad payload")
+		}
+		seen[t.Name] = true
+	}
+	_, chosen := splitBatchOption(option)
+	pick := map[string]bool{}
+	for _, k := range chosen {
+		if !seen[k] {
+			return nil, errors.New("unknown item in the selection; nothing was registered")
+		}
+		pick[k] = true
+	}
+	var registered, skipped []string
+	failed := map[string]string{}
+	keys := map[string]string{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, t := range bt.Targets {
+		if !pick[t.Name] {
+			skipped = append(skipped, t.Name)
+			continue
+		}
+		wg.Go(func() {
+			res, err := s.executeSSHRegister(ctx, h, t)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				failed[t.Name] = err.Error()
+				return
+			}
+			registered = append(registered, t.Name)
+			if m, ok := res.(map[string]any); ok {
+				keys[t.Name], _ = m["public_key_line"].(string)
+			}
+		})
+	}
+	wg.Wait()
+	slices.Sort(registered)
+	return map[string]any{"registered": registered, "not_registered": skipped, "failed": failed, "public_key_lines": keys,
+		"next": "Add each public key line to ~/.ssh/authorized_keys of its user on its server (the SSH targets page shows them too), then grant the targets to roles."}, nil
 }
 
 // executeSSHRegister runs once the user approved. Rubi Home refuses when the server's key is no longer the one
@@ -625,7 +732,11 @@ func (s *sisters) executeSSHRegister(ctx context.Context, h sisterHost, t sshTic
 	}
 	s.setSSHKey(t.Device, t.Name, line)
 	s.mu.Lock()
-	delete(s.sshDrafts, draftKey(t.Device, t.Name))
+	// The draft goes only if it is still what was approved; one the user edited since stays for a new check.
+	if dr := s.sshDrafts[draftKey(t.Device, t.Name)]; dr != nil && dr.Host == t.Host && dr.Port == t.Port && dr.User == t.User &&
+		dr.Ask == t.AskEachTime && dr.Reuse == t.Reuse && slices.Equal(dr.Allowed, t.Allowed) {
+		delete(s.sshDrafts, draftKey(t.Device, t.Name))
+	}
 	s.mu.Unlock()
 	_, _ = s.listSSH(ctx, h, t.Device)
 	h.Audit(auditSSHRegistered, map[string]any{"device": t.Device, "target": t.Name, "host": t.Host, "port": t.Port, "user": t.User, "fingerprint": t.Fingerprint,

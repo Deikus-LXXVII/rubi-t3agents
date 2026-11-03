@@ -85,7 +85,11 @@ func (s *sisters) roleStartTool(ctx context.Context, h sisterHost, in roleStartI
 			preview["replaces"] = b.Title + " (" + b.SessionID + ")"
 		}
 	}
-	return h.Submit(ctx, rubiplugin.Request{Kind: kindStart,
+	req := rubiplugin.Request{Kind: kindStart,
 		Summary: "Start Claude in the role " + oneLine(r.Name, 30) + " of " + oneLine(firstNonEmpty(proj.Dir, proj.ID), 40) + " on " + c.Dev.Name + " for " + c.Bot + ": " + oneLine(task, 80),
-		Preview: preview, Payload: t})
+		Preview: preview, Payload: t}
+	if in.TrustProject {
+		s.startTrustItems(&req, &t, c.Bot, c.Dev, proj)
+	}
+	return h.Submit(ctx, req)
 }
