@@ -46,7 +46,7 @@ func manifest() rubiplugin.Manifest {
 		Source:      "https://github.com/Deikus-LXXVII/rubi-t3agents",
 		// Needs a Rubi that knows the "t3-agent" and "t3-setup" capabilities of Rubi Home; this plugin version must not be
 		// published before the Rubi release that has them.
-		MinRubi: "v0.14.0-rc.2",
+		MinRubi: "v0.14.0",
 		Entry:   "t3agents",
 		Actions: []rubiplugin.Action{
 			{Kind: kindRun, Title: "Run a command in a T3 thread", DefaultLevel: rubiplugin.Strong, Locked: true, Options: trust},
