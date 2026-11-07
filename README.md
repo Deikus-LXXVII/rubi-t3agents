@@ -10,8 +10,8 @@ Rubi Home does the work on the computer.
 
 - **`t3-agent`**: projects, threads (start, send, messages, status, close, interrupt, fork, mode, rename), the
   queue of questions the agents ask, roles, SSH targets and the usage limits.
-- **`t3-setup`**: the setup page's steps (container tool, runner image, T3 installed and pinned, T3 paired,
-  each role's provider sign-in, a self-test).
+- **`t3-setup`**: the setup page's steps (container tool, runner image, T3 installed, pinned and running,
+  T3 paired with Rubi Home, Claude sign-in for each role, a self-test).
 
 The plugin has no network access, no files and no secrets of its own.
 
@@ -108,15 +108,16 @@ lists in `t3-setup.status`, in order, and the one button Home names for each:
 1. **Apple container**: install (a strong approval first; macOS shows its own administrator dialog).
 2. **Container service**: start.
 3. **Runner image**: build or update.
-4. **T3 installed and pinned**: install or update to the pinned version.
-5. **T3 paired with Rubi**: pair.
-6. **Provider sign-in per role**: each role has its own row. Sign-in relays Claude's `claude auth login`:
+4. **T3 installed, pinned and running**: install or update to the pinned version.
+5. **T3 paired with Rubi Home**: pair.
+6. **Claude sign-in**: each role has its own row. Sign-in relays Claude's `claude auth login`:
    open the link (shown as text, opened by a button), sign in, paste the code into the box that appears with the
    link. The code goes to Rubi Home and is never kept or audited.
 7. **Self-test**, per project.
 
 The project folders are listed apart, with Remove; a Bot adds one when you ask it (`t3agents_project_add`). The page
-refreshes every 3 seconds while a step runs or a sign-in waits, and not otherwise.
+refreshes every 3 seconds while a step runs or a sign-in waits. A setup action drops the cached status, so the
+redraw shows the new state, and the page keeps refreshing until that state has changed.
 
 ## Limits
 
