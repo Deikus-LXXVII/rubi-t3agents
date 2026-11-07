@@ -37,8 +37,8 @@ func TestT3SetupPageListsTheSteps(t *testing.T) {
 			heads = append(heads, its[0]["title"].(string))
 		}
 	}
-	want := []string{"1. Apple container: done", "2. Container service: done", "3. Runner image: done", "4. T3 installed and pinned: not done",
-		"5. T3 paired with Rubi: not done", "6. Provider sign-in per role: not done", "7. Self-test: not done"}
+	want := []string{"1. Apple container: done", "2. Container service: done", "3. Runner image: done", "4. T3 installed, pinned and running: not done",
+		"5. T3 paired with Rubi Home: not done", "6. Claude sign-in: not done", "7. Self-test: not done"}
 	if strings.Join(heads, "|") != strings.Join(want, "|") {
 		t.Errorf("steps %q, want %q", heads, want)
 	}
@@ -131,7 +131,7 @@ func TestT3SetupSignInPerRole(t *testing.T) {
 	pg := setupView(t, s, f)
 	var rows []map[string]any
 	for _, sec := range pg["sections"].([]map[string]any) {
-		if strings.HasSuffix(sec["title"].(string), ". Provider sign-in per role") {
+		if strings.HasSuffix(sec["title"].(string), ". Claude sign-in") {
 			rows = sec["items"].([]map[string]any)
 		}
 	}

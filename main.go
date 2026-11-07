@@ -39,7 +39,7 @@ func manifest() rubiplugin.Manifest {
 	// Version is the last release; a release build replaces it with its tag (rubiplugin.Version, set
 	// with -ldflags).
 	return rubiplugin.Manifest{
-		ID: "t3agents", Name: "T3 Agents", Version: "v0.1.0",
+		ID: "t3agents", Name: "T3 Agents", Version: "v0.2.0",
 		Description: "Bots start and steer agent threads that run in T3 Code on your computer, each in a role VM; you approve what matters.",
 		Needs:       "Rubi Home on the computer that runs T3 Code, with the T3 Agents setup done (container tool, runner image, T3 installed and paired, a sign-in per role).",
 		Publisher:   rubiplugin.Publisher{Name: "Rubi-Project", Key: PublisherKey},

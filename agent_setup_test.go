@@ -218,7 +218,7 @@ func TestSetupPageStates(t *testing.T) {
 	for _, sec := range setupView(t, s, f)["sections"].([]map[string]any) {
 		titles = append(titles, sec["title"].(string))
 	}
-	if j := strings.Join(titles, "|"); !strings.Contains(j, "|3. Runner image|4. T3 installed and pinned|5. T3 paired with Rubi|6. Provider sign-in per role|7. Self-test|") || !strings.Contains(j, "|Project folders") || strings.Contains(j, ". Projects") {
+	if j := strings.Join(titles, "|"); !strings.Contains(j, "|3. Runner image|4. T3 installed, pinned and running|5. T3 paired with Rubi Home|6. Claude sign-in|7. Self-test|") || !strings.Contains(j, "|Project folders") || strings.Contains(j, ". Projects") {
 		t.Errorf("sections %s", j)
 	}
 	if a["Sign in with an Anthropic Console account"] != nil || a["Sign out"] != nil || a["Install"] != nil || a["Start"] != nil || a["Check the sign-in"] != nil {
@@ -269,6 +269,9 @@ func TestSetupPageWorkingAndSignIn(t *testing.T) {
 			t.Errorf("%q while a job runs", no)
 		}
 	}
+	if blob, _ := json.Marshal(pg); strings.Contains(string(blob), "buttons below") {
+		t.Error("the running box tells the user to wait when Cancel is on it")
+	}
 	pr := a["Paste the code"]["prompt"].(map[string]any)
 	if pr["arg"] != "code" || pr["label"] != "Paste the code shown on the Claude page" || pr["value"] != "" {
 		t.Fatalf("%v", pr)
@@ -283,7 +286,7 @@ func TestSetupPageWorkingAndSignIn(t *testing.T) {
 	secs := pg["sections"].([]map[string]any)
 	var login []map[string]any
 	for _, sec := range secs {
-		if strings.HasSuffix(sec["title"].(string), ". Provider sign-in per role") {
+		if strings.HasSuffix(sec["title"].(string), ". Claude sign-in") {
 			login = sec["items"].([]map[string]any)
 		}
 	}
@@ -667,5 +670,79 @@ func TestSetupModeSection(t *testing.T) {
 	secs = pg["sections"].([]map[string]any)
 	if secs[len(secs)-1]["title"] == "Usage mode" {
 		t.Error("section shown without t3-agent")
+	}
+}
+
+func TestSetupPageUsesHomeTitles(t *testing.T) {
+	st := allDone()
+	st["steps"].([]map[string]any)[3]["title"] = "From Home"
+	f, s := setupFixture(t, st)
+	var titles []string
+	for _, sec := range setupView(t, s, f)["sections"].([]map[string]any) {
+		titles = append(titles, sec["title"].(string))
+	}
+	j := strings.Join(titles, "|")
+	if !strings.Contains(j, "4. From Home") || strings.Contains(j, "T3 installed, pinned and running") {
+		t.Fatalf("home title did not win: %s", j)
+	}
+}
+
+func TestFailedSignInOffersANewLink(t *testing.T) {
+	st := allDone()
+	st["steps"].([]map[string]any)[6] = step("login", "failed", "The sign-in failed: that code was not accepted.", "login",
+		map[string]any{"projects": []any{loginRow("failed", "that code was not accepted", "login")}})
+	f, s := setupFixture(t, st)
+	a := allActions(setupView(t, s, f))
+	if a["Get a new sign-in link"] == nil || a["Sign in"] != nil {
+		t.Fatalf("%v", a)
+	}
+}
+
+func TestSetupActionBypassesTheCachedStatus(t *testing.T) {
+	old := setupStatusReuse
+	setupStatusReuse = 2 * time.Second
+	t.Cleanup(func() { setupStatusReuse = old })
+	st := allDone()
+	st["steps"].([]map[string]any)[6] = step("login", "failed", "The sign-in failed: that code was not accepted.", "login", nil)
+	f, s, _ := agentFixture(t)
+	f.setup = &fakeSetup{status: st}
+	if allActions(setupView(t, s, f))["Get a new sign-in link"] == nil {
+		t.Fatal("no retry on the failed sign-in")
+	}
+	next := allDone()
+	next["steps"].([]map[string]any)[6] = step("login", "working", "Signing in...", "cancel", nil)
+	next["login"] = map[string]any{"url": "https://claude.example/oauth", "wants_code": true, "role": "reviewer"}
+	f.setup.status = next
+	if allActions(setupView(t, s, f))["Open the sign-in page"] != nil {
+		t.Fatal("the cached status was not reused")
+	}
+	if _, err := s.panel(context.Background(), f, "setup_run", json.RawMessage(`{"device":"dev_mac","step":"login","method":"claudeai"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if allActions(setupView(t, s, f))["Open the sign-in page"] == nil {
+		t.Fatal("the page after Sign in still shows the cached failure")
+	}
+}
+
+func TestSetupActionRefreshesUntilTheStatusChanges(t *testing.T) {
+	old := setupStatusReuse
+	setupStatusReuse = 2 * time.Second
+	t.Cleanup(func() { setupStatusReuse = old })
+	st := allDone()
+	st["steps"].([]map[string]any)[7] = step("selftest", "failed", "1 of 1 roles failed.", "selftest",
+		map[string]any{"projects": []any{row("failed", "The role VM did not start.", "selftest")}})
+	f, s, _ := agentFixture(t)
+	f.setup = &fakeSetup{status: st}
+	_ = setupView(t, s, f)
+	if _, err := s.panel(context.Background(), f, "setup_run", json.RawMessage(`{"device":"dev_mac","step":"selftest","project":"p1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	pg := setupView(t, s, f)
+	if pg["refresh"] != 3 {
+		t.Fatalf("refresh %v", pg["refresh"])
+	}
+	blob, _ := json.Marshal(pg)
+	if !strings.Contains(string(blob), "Starting") {
+		t.Fatalf("no starting notice: %s", blob)
 	}
 }
