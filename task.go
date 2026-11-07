@@ -55,6 +55,26 @@ var taskMoves = map[taskState][]taskState{
 	taskFinishing: {taskDone, taskIdle, taskFailed, taskStopped},
 }
 
+// taskIsolation is where a project's agents run: "vm" (the project's own VM, the default) or "host" (no
+// container: the project's no-container option, which reaches everything on the machine). It is the project's
+// setting, never the Bot's choice, and the task's approval shows it.
+type taskIsolation string
+
+const (
+	isolationVM   taskIsolation = "vm"
+	isolationHost taskIsolation = "host"
+)
+
+func (i taskIsolation) valid() bool { return i == isolationVM || i == isolationHost }
+
+// taskSite is where a turn is about to run, as Rubi Home reports it now: the computer, the project and the
+// project's isolation at this moment.
+type taskSite struct {
+	Device    string
+	Project   string
+	Isolation taskIsolation
+}
+
 func (s taskState) final() bool { return s == taskDone || s == taskFailed || s == taskStopped }
 
 func (s taskState) canMove(to taskState) bool { return slices.Contains(taskMoves[s], to) }
@@ -62,30 +82,33 @@ func (s taskState) canMove(to taskState) bool { return slices.Contains(taskMoves
 // taskMandate is what the task's approval granted. It travels in the approval's payload (as the offer) and is kept
 // in the plugin's saved state, so what the user read is what holds.
 type taskMandate struct {
-	ID         string    `json:"id"`
-	Device     string    `json:"device"`
-	DeviceName string    `json:"device_name,omitempty"`
-	Project    string    `json:"project"`
-	Role       string    `json:"role,omitempty"`
-	Base       string    `json:"base,omitempty"` // "" until Rubi Home names the repository's default branch
-	BaseSHA    string    `json:"base_sha,omitempty"`
-	Branch     string    `json:"branch"`
-	Sister     string    `json:"sister"` // the Bot that asked; task events go to it only
-	Issued     time.Time `json:"issued"`
-	Expires    time.Time `json:"expires"`
-	MaxTurns   int       `json:"max_turns,omitempty"` // 0: no turn budget
-	Turns      int       `json:"turns"`
-	Ended      bool      `json:"ended,omitempty"` // stopped, finished or revoked
+	ID         string `json:"id"`
+	Device     string `json:"device"`
+	DeviceName string `json:"device_name,omitempty"`
+	Project    string `json:"project"`
+	Role       string `json:"role,omitempty"`
+	Base       string `json:"base,omitempty"` // "" until Rubi Home names the repository's default branch
+	BaseSHA    string `json:"base_sha,omitempty"`
+	Branch     string `json:"branch"`
+	// Isolation the task was approved for. A task never continues under another one: a project switched between
+	// its VM and no container stops the task (holds), and a record without it reads as invalid (fails closed).
+	Isolation taskIsolation `json:"isolation"`
+	Sister    string        `json:"sister"` // the Bot that asked; task events go to it only
+	Issued    time.Time     `json:"issued"`
+	Expires   time.Time     `json:"expires"`
+	MaxTurns  int           `json:"max_turns,omitempty"` // 0: no turn budget
+	Turns     int           `json:"turns"`
+	Ended     bool          `json:"ended,omitempty"` // stopped, finished or revoked
 }
 
-// live: not ended, before its end time and within its turn budget.
-func (m taskMandate) live(now time.Time) bool {
-	return !m.Ended && now.Before(m.Expires) && (m.MaxTurns == 0 || m.Turns < m.MaxTurns)
-}
+// live: valid, not ended, before its end time and within its turn budget (why says which one fails).
+func (m taskMandate) live(now time.Time) bool { return m.why(now) == "" }
 
 // why says why the mandate no longer holds ("" while it does).
 func (m taskMandate) why(now time.Time) string {
 	switch {
+	case !m.Isolation.valid():
+		return "the task's record has no isolation"
 	case m.Ended:
 		return "the task has ended"
 	case !now.Before(m.Expires):
@@ -96,6 +119,30 @@ func (m taskMandate) why(now time.Time) string {
 	return ""
 }
 
+// at says why the mandate doesn't cover a turn at site ("" when it does): another computer, another project, or the
+// project's isolation changed since the approval.
+func (m taskMandate) at(site taskSite) string {
+	switch {
+	case site.Device != m.Device:
+		return "the task belongs to another computer"
+	case site.Project != m.Project:
+		return "the task belongs to project " + oneLine(m.Project, 64)
+	case site.Isolation != m.Isolation:
+		return fmt.Sprintf("the project now runs agents %s; the task was approved %s, start a new task", isolationWords(site.Isolation), isolationWords(m.Isolation))
+	}
+	return ""
+}
+
+func isolationWords(i taskIsolation) string {
+	switch i {
+	case isolationVM:
+		return "in its VM"
+	case isolationHost:
+		return "without a container"
+	}
+	return "in an unknown way"
+}
+
 // allowsPush says whether Rubi may push ref for this task: only the task's own branch (as a name or as
 // refs/heads/<name>), never a protected branch or the base. The turn budget doesn't apply (the work of the last
 // turn is pushed too), and the push may come up to taskPushGrace after the end time, so a task whose time ran out
@@ -104,6 +151,9 @@ func (m taskMandate) why(now time.Time) string {
 func (m taskMandate) allowsPush(ref string, now time.Time) (bool, string) {
 	if m.Ended {
 		return false, "the task has ended"
+	}
+	if !m.Isolation.valid() {
+		return false, "the task's record has no isolation"
 	}
 	if !now.Before(m.Expires.Add(taskPushGrace)) {
 		return false, "the task's time ran out at " + m.Expires.UTC().Format(time.RFC3339)
@@ -136,17 +186,29 @@ type taskStartIn struct {
 
 // taskOffer is what the task's strong approval shows and grants.
 type taskOffer struct {
-	Project  string    `json:"project"`
-	Role     string    `json:"role,omitempty"`
-	Base     string    `json:"base,omitempty"`
-	Branch   string    `json:"branch"`
-	Expires  time.Time `json:"expires"`
-	MaxTurns int       `json:"max_turns,omitempty"`
+	Project   string        `json:"project"`
+	Role      string        `json:"role,omitempty"`
+	Base      string        `json:"base,omitempty"`
+	Branch    string        `json:"branch"`
+	Expires   time.Time     `json:"expires"`
+	MaxTurns  int           `json:"max_turns,omitempty"`
+	Isolation taskIsolation `json:"isolation"`
+}
+
+// warning is the line the approval shows in capitals for a project without a container ("" in its VM).
+func (o taskOffer) warning() string {
+	if o.Isolation == isolationHost {
+		return "NO CONTAINER: the agents of " + o.Project + " run on the computer itself and can reach everything on it, including other projects and your provider sign-ins."
+	}
+	return ""
 }
 
 // newTaskOffer checks a start request and fills in the defaults: the branch agent/<slug of the prompt>, an end
-// eight hours from now.
-func newTaskOffer(in taskStartIn, now time.Time) (taskOffer, error) {
+// eight hours from now. iso is the project's isolation as Rubi Home reports it.
+func newTaskOffer(in taskStartIn, iso taskIsolation, now time.Time) (taskOffer, error) {
+	if !iso.valid() {
+		return taskOffer{}, errors.New("Rubi Home didn't say how the project's agents are isolated")
+	}
 	project := strings.TrimSpace(in.Project)
 	if project == "" {
 		return taskOffer{}, errors.New("say which project the task is for (t3agents_sessions lists them)")
@@ -189,7 +251,7 @@ func newTaskOffer(in taskStartIn, now time.Time) (taskOffer, error) {
 		return taskOffer{}, fmt.Errorf("max_turns must be between 0 (no budget) and %d", taskMaxTurns)
 	}
 	return taskOffer{Project: project, Role: strings.TrimSpace(in.Role), Base: base, Branch: branch,
-		Expires: now.Add(ttl), MaxTurns: in.MaxTurns}, nil
+		Expires: now.Add(ttl), MaxTurns: in.MaxTurns, Isolation: iso}, nil
 }
 
 // checkTaskBranch: a plain new branch under agent/*, never a protected name.
@@ -266,7 +328,7 @@ func taskSlug(prompt string) string {
 // grantTask turns an approved offer into the mandate.
 func grantTask(o taskOffer, device, deviceName, sister string, now time.Time) taskMandate {
 	return taskMandate{ID: newID("tk_"), Device: device, DeviceName: deviceName, Project: o.Project, Role: o.Role,
-		Base: o.Base, Branch: o.Branch, Sister: sister, Issued: now, Expires: o.Expires, MaxTurns: o.MaxTurns}
+		Base: o.Base, Branch: o.Branch, Isolation: o.Isolation, Sister: sister, Issued: now, Expires: o.Expires, MaxTurns: o.MaxTurns}
 }
 
 // task is one task as the plugin keeps it.
@@ -298,15 +360,18 @@ func (t *task) move(to taskState, reason string, now time.Time) error {
 	return nil
 }
 
-// startTurn records a new turn by who ("bot", "owner-t3", "agent"): the task must be live and not final, and a
-// turn counts against the budget.
-func (t *task) startTurn(by string, now time.Time) error {
+// startTurn records a new turn by who ("bot", "owner-t3", "agent") at site: the task must be live, not final and
+// still covered where the turn runs (computer, project, isolation), and a turn counts against the budget.
+func (t *task) startTurn(by string, site taskSite, now time.Time) error {
 	switch by {
 	case "bot", "owner-t3", "agent":
 	default:
 		return fmt.Errorf("unknown turn origin %q", oneLine(by, 20))
 	}
 	if w := t.Mandate.why(now); w != "" {
+		return errors.New(w)
+	}
+	if w := t.Mandate.at(site); w != "" {
 		return errors.New(w)
 	}
 	if t.State != taskWorking { // a turn queued behind a running one keeps the task working

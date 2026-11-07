@@ -8,6 +8,8 @@ import (
 
 var taskNow = time.Date(2026, 11, 7, 20, 0, 0, 0, time.UTC)
 
+var testSite = taskSite{Device: "d1", Project: "rubi", Isolation: isolationVM}
+
 func TestTaskStateMoves(t *testing.T) {
 	all := []taskState{taskPreparing, taskWorking, taskNeedsYou, taskIdle, taskFinishing, taskDone, taskFailed, taskStopped}
 	allowed := map[[2]taskState]bool{}
@@ -35,7 +37,7 @@ func TestTaskStateMoves(t *testing.T) {
 }
 
 func testMandate() taskMandate {
-	return taskMandate{ID: "tk_x", Device: "d1", Project: "rubi", Base: "main", Branch: "agent/fix-login", Sister: "s1",
+	return taskMandate{ID: "tk_x", Device: "d1", Project: "rubi", Base: "main", Branch: "agent/fix-login", Isolation: isolationVM, Sister: "s1",
 		Issued: taskNow, Expires: taskNow.Add(8 * time.Hour)}
 }
 
@@ -59,7 +61,7 @@ func TestTaskFinalStateEndsTheMandate(t *testing.T) {
 		if ok, _ := tk.Mandate.allowsPush("agent/fix-login", taskNow); ok {
 			t.Errorf("%s: a push is allowed after the task ended", end)
 		}
-		if err := tk.startTurn("bot", taskNow); err == nil {
+		if err := tk.startTurn("bot", testSite, taskNow); err == nil {
 			t.Errorf("%s: a turn started after the task ended", end)
 		}
 	}
@@ -87,10 +89,10 @@ func TestTaskTurnsCountAndAreAttributed(t *testing.T) {
 	m := testMandate()
 	m.MaxTurns = 2
 	tk := newTask(m, taskNow)
-	if err := tk.startTurn("bot", taskNow); err != nil {
+	if err := tk.startTurn("bot", testSite, taskNow); err != nil {
 		t.Fatal(err)
 	}
-	if err := tk.startTurn("owner-t3", taskNow); err != nil { // queued behind the running turn
+	if err := tk.startTurn("owner-t3", testSite, taskNow); err != nil { // queued behind the running turn
 		t.Fatal(err)
 	}
 	if tk.Mandate.Turns != 2 || tk.LastBy != "owner-t3" || tk.State != taskWorking {
@@ -99,10 +101,10 @@ func TestTaskTurnsCountAndAreAttributed(t *testing.T) {
 	if err := tk.move(taskIdle, "", taskNow); err != nil {
 		t.Fatal(err)
 	}
-	if err := tk.startTurn("bot", taskNow); err == nil || !strings.Contains(err.Error(), "2 turns") {
+	if err := tk.startTurn("bot", testSite, taskNow); err == nil || !strings.Contains(err.Error(), "2 turns") {
 		t.Errorf("a turn past the budget: %v", err)
 	}
-	if err := tk.startTurn("someone", taskNow); err == nil {
+	if err := tk.startTurn("someone", testSite, taskNow); err == nil {
 		t.Error("an unknown turn origin was accepted")
 	}
 }
@@ -170,14 +172,14 @@ func TestTaskReasonDoesNotOutliveTheNextMove(t *testing.T) {
 }
 
 func TestTaskOfferDefaults(t *testing.T) {
-	o, err := newTaskOffer(taskStartIn{Project: " rubi ", Prompt: "Fix the login page: buttons overlap!"}, taskNow)
+	o, err := newTaskOffer(taskStartIn{Project: " rubi ", Prompt: "Fix the login page: buttons overlap!"}, isolationVM, taskNow)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if o.Project != "rubi" || o.Branch != "agent/fix-the-login-page-buttons-overlap" || !o.Expires.Equal(taskNow.Add(8*time.Hour)) || o.MaxTurns != 0 {
 		t.Fatalf("offer %+v", o)
 	}
-	o, err = newTaskOffer(taskStartIn{Project: "rubi", Prompt: "x", Branch: "agent/ui-pass", Base: "release/1.2", Expires: "90m", MaxTurns: 40}, taskNow)
+	o, err = newTaskOffer(taskStartIn{Project: "rubi", Prompt: "x", Branch: "agent/ui-pass", Base: "release/1.2", Expires: "90m", MaxTurns: 40}, isolationVM, taskNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +223,7 @@ func TestTaskOfferRefused(t *testing.T) {
 		{"turns", taskStartIn{Project: "p", Prompt: "x", MaxTurns: taskMaxTurns + 1}, "max_turns"},
 		{"turns negative", taskStartIn{Project: "p", Prompt: "x", MaxTurns: -1}, "max_turns"},
 	} {
-		if _, err := newTaskOffer(c.in, taskNow); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := newTaskOffer(c.in, isolationVM, taskNow); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: err = %v, want it to mention %q", c.name, err, c.want)
 		}
 	}
@@ -245,5 +247,66 @@ func TestTaskSlug(t *testing.T) {
 		if len(got) > taskMaxSlug || checkTaskBranch("agent/"+got) != nil {
 			t.Errorf("taskSlug(%q) = %q isn't a usable branch suffix", in, got)
 		}
+	}
+}
+
+func TestTaskOfferCarriesTheProjectsIsolation(t *testing.T) {
+	in := taskStartIn{Project: "rubi", Prompt: "x"}
+	vm, err := newTaskOffer(in, isolationVM, taskNow)
+	if err != nil || vm.Isolation != isolationVM || vm.warning() != "" {
+		t.Fatalf("vm offer %+v, warning %q, err %v", vm, vm.warning(), err)
+	}
+	host, err := newTaskOffer(in, isolationHost, taskNow)
+	if err != nil || host.Isolation != isolationHost {
+		t.Fatalf("host offer %+v, err %v", host, err)
+	}
+	if w := host.warning(); !strings.HasPrefix(w, "NO CONTAINER") || !strings.Contains(w, "rubi") || !strings.Contains(w, "provider sign-ins") {
+		t.Errorf("host warning %q", w)
+	}
+	if m := grantTask(host, "d1", "box", "s1", taskNow); m.Isolation != isolationHost {
+		t.Errorf("the mandate lost the isolation: %+v", m)
+	}
+	for _, iso := range []taskIsolation{"", "container", "VM"} {
+		if _, err := newTaskOffer(in, iso, taskNow); err == nil || !strings.Contains(err.Error(), "isolated") {
+			t.Errorf("isolation %q: err = %v", iso, err)
+		}
+	}
+}
+
+func TestTaskTurnOnlyWhereTheMandateHolds(t *testing.T) {
+	for _, c := range []struct {
+		site taskSite
+		want string
+	}{
+		{taskSite{Device: "d2", Project: "rubi", Isolation: isolationVM}, "another computer"},
+		{taskSite{Device: "d1", Project: "other", Isolation: isolationVM}, "project rubi"},
+		{taskSite{Device: "d1", Project: "rubi", Isolation: isolationHost}, "without a container"},
+	} {
+		tk := newTask(testMandate(), taskNow)
+		err := tk.startTurn("bot", c.site, taskNow)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("site %+v: err = %v, want %q", c.site, err, c.want)
+		}
+		if tk.State != taskPreparing || tk.Mandate.Turns != 0 || tk.LastBy != "" {
+			t.Errorf("site %+v: a refused turn changed the task: %+v", c.site, tk)
+		}
+	}
+	// A task approved without a container doesn't continue once the project is back in its VM either.
+	m := testMandate()
+	m.Isolation = isolationHost
+	tk := newTask(m, taskNow)
+	if err := tk.startTurn("bot", testSite, taskNow); err == nil || !strings.Contains(err.Error(), "in its VM") {
+		t.Errorf("host task in a vm project: %v", err)
+	}
+}
+
+func TestTaskRecordWithoutIsolationFailsClosed(t *testing.T) {
+	m := testMandate()
+	m.Isolation = ""
+	if m.live(taskNow) || !strings.Contains(m.why(taskNow), "isolation") {
+		t.Error("a record without isolation holds")
+	}
+	if ok, _ := m.allowsPush(m.Branch, taskNow); ok {
+		t.Error("a record without isolation may push")
 	}
 }
