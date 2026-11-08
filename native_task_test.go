@@ -13,6 +13,7 @@ import (
 const nativeFixtureID = "task_0123456789abcdef01234567"
 
 type nativeHost struct {
+	noAutonomy bool
 	*fakeHost
 	state                             nativeTaskView
 	starts, publishes, appends, stops int
@@ -29,7 +30,7 @@ func (h *nativeHost) HomeCall(ctx context.Context, device, op string, args, out 
 		if h.unsupported {
 			return errors.New("unknown operation")
 		}
-		value = map[string]any{"version": 1, "supervision": 1, "supported": true}
+		value = map[string]any{"version": 1, "supervision": 1, "supported": true, "autonomous": !h.noAutonomy}
 	case "t3-agent.task.list":
 		value = map[string]any{"tasks": []nativeTaskView{h.state}}
 	case "t3-agent.task.ack":
@@ -110,7 +111,7 @@ func TestNativeTaskOneExactConfirmationBeforeLaunch(t *testing.T) {
 	}
 	var args map[string]any
 	json.Unmarshal(h.launch, &args)
-	if args["task"] != true || args["auto_finish"] != true || args["from"] != "Citri" || !strings.Contains(args["prompt"].(string), nativeTaskOrders) {
+	if args["task"] != true || args["auto_finish"] != true || args["mode"] != "bypassPermissions" || args["from"] != "Citri" || !strings.Contains(args["prompt"].(string), nativeTaskOrders) {
 		t.Fatal("incomplete mandate")
 	}
 	if _, err := s.nativeTaskStart(context.Background(), h, nativeTaskStartIn{Prompt: "spoof"}); err == nil {
@@ -310,5 +311,16 @@ func TestNativeLegacyFinishedDoesNotClaimCleanup(t *testing.T) {
 	raw, _ := json.Marshal(page)
 	if !strings.Contains(string(raw), "UNCONFIRMED") {
 		t.Fatal("legacy cleanup uncertainty hidden")
+	}
+}
+
+func TestNativeTaskRefusesBeforeApprovalWhenHomeCeilingDisallowsAutonomy(t *testing.T) {
+	h, s := nativeFixture(t)
+	h.noAutonomy = true
+	if _, err := s.nativeTaskStart(context.Background(), h, nativeTaskStartIn{VerifiedAgent: "Citri", Device: "box", Project: "a", Role: "r", Prompt: "work"}); err == nil {
+		t.Fatal("interactive task accepted as unattended")
+	}
+	if h.starts != 0 || len(h.submits) != 0 {
+		t.Fatal("policy refusal created work or an unusable approval")
 	}
 }

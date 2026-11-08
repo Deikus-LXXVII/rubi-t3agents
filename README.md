@@ -146,7 +146,11 @@ release build sets it with `-ldflags "-X main.PublisherKey=..."`.
 
 The `t3agents_task_start` MCP tool requests one **locked Strong** approval for
 an exact device/project/role/brief/provider/model and optional publication target
-`{repository,base,account}`. No work starts before that approval. A new private
+`{repository,base,account}`. No work starts before that approval. It explicitly includes native full-access
+inside the unchanged project srt boundary. Existing host/role/global ceilings
+must permit that mode; Home refuses before creating work rather than silently
+parking an unattended task on an unhandled native permission dialog. No settings
+or sandbox policy are changed. A new private
 repository copy and `rubi/task_*` branch are used, never the enrolled source copy.
 The capability handshake runs before approval and execution; an old Home is
 refused rather than silently treating `task:true` as an ordinary source session.

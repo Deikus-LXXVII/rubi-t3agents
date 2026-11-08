@@ -86,6 +86,7 @@ func (v nativeTaskView) autoReady() bool {
 
 func requireNativeTasks(ctx context.Context, h homeCaller, device string) error {
 	var c struct {
+		Autonomous  bool `json:"autonomous"`
 		Version     int  `json:"version"`
 		Supported   bool `json:"supported"`
 		Supervision int  `json:"supervision"`
@@ -125,7 +126,7 @@ func (s *sisters) nativeTaskStart(ctx context.Context, h sisterHost, in nativeTa
 	if provider != "claudeAgent" && in.Model == "" {
 		return nil, errors.New("task: this provider requires an explicit model")
 	}
-	args := map[string]any{"project": in.Project, "role": in.Role, "prompt": in.Prompt + nativeTaskOrders, "provider": provider, "task": true, "auto_finish": true, "from": in.VerifiedAgent, "bot": botID(in.VerifiedAgent), "message_id": newID("task-request_")}
+	args := map[string]any{"project": in.Project, "role": in.Role, "prompt": in.Prompt + nativeTaskOrders, "provider": provider, "task": true, "auto_finish": true, "mode": "bypassPermissions", "from": in.VerifiedAgent, "bot": botID(in.VerifiedAgent), "message_id": newID("task-request_")}
 	if in.Model != "" {
 		args["model"] = in.Model
 	}
@@ -134,7 +135,7 @@ func (s *sisters) nativeTaskStart(ctx context.Context, h sisterHost, in nativeTa
 	}
 	raw, _ := json.Marshal(args)
 	return h.Submit(ctx, rubiplugin.Request{Kind: kindNativeTask, Summary: "Run an isolated repository task for " + oneLine(in.Project, 64),
-		Preview: map[string]any{"computer": d.Name, "project": in.Project, "role": in.Role, "provider": provider, "model": in.Model, "task": in.Prompt, "standing_orders": nativeTaskOrders, "publish": in.Publish, "scope": "A separate repository copy and rubi/task_* branch; project-only srt sandbox; no main changes or merges. Final PASS seals the task and publishes only the approved branch, if configured."},
+		Preview: map[string]any{"computer": d.Name, "project": in.Project, "role": in.Role, "provider": provider, "model": in.Model, "task": in.Prompt, "standing_orders": nativeTaskOrders, "native_mode": "full-access inside project srt only; existing host/role ceiling must allow it", "publish": in.Publish, "scope": "A separate repository copy and rubi/task_* branch; project-only srt sandbox; no main changes or merges. Final PASS seals the task and publishes only the approved branch, if configured."},
 		Payload: nativeTaskTicket{Device: d.ID, Args: raw}})
 }
 func executeNativeTask(ctx context.Context, h homeCaller, option string, payload json.RawMessage) (any, error) {
