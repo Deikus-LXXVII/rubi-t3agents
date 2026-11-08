@@ -140,3 +140,59 @@ release build sets it with `-ldflags "-X main.PublisherKey=..."`.
 ## License
 
 [MIT](LICENSE)
+
+
+## Native repository tasks (companion Home capability required)
+
+The `t3agents_task_start` MCP tool requests one **locked Strong** approval for
+an exact device/project/role/brief/provider/model and optional publication target
+`{repository,base,account}`. No work starts before that approval. It explicitly includes native full-access
+inside the unchanged project srt boundary. Existing host/role/global ceilings
+must permit that mode; Home refuses before creating work rather than silently
+parking an unattended task on an unhandled native permission dialog. No settings
+or sandbox policy are changed. A new private
+repository copy and `rubi/task_*` branch are used, never the enrolled source copy.
+The capability handshake runs before approval and execution; an old Home is
+refused rather than silently treating `task:true` as an ordinary source session.
+Current supervised repository tasks require **Linux**; standalone macOS sessions
+remain available. The per-project T3 SDK/server remains unmodified.
+
+Tools: `t3agents_task_start`, `t3agents_task_status`, `t3agents_task_append`,
+`t3agents_task_stop`, `t3agents_task_accounts`. Only the original verified Bot can
+control its task via MCP. The authenticated panel owner can append/stop any of
+their tasks from **Repository tasks**. Cards show branch/commit, work, frozen Git
+diff-stat, **agent-reported** test evidence and a validated exact-repository PR
+link. Agent text is rendered as text, never HTML. Full authenticated panel links
+are minted by Core at `https://rubi-panel.com/`.
+
+### Optional GitHub publication account
+
+Enter a fine-grained token only in the panel's masked **Fine-grained GitHub token**
+field. Select the approved repositories only, Contents read/write and Pull
+requests read/write. It is encrypted in Rubi's vault; Core resolves it only at
+publication time. It is never copied into public settings, task arguments, logs,
+provider environment or sandbox files. Use the stable account ID returned by
+`t3agents_task_accounts` as `publish.account`. Leave the optional token blank for
+local tasks with no GitHub publishing. No token is requested through chat/MCP.
+Setup validation performs no GitHub network call; authorization is checked by
+Core's exact-target publication broker when used.
+
+The task prompt asks for an explicit trailing `STATUS: PASS`, `COMMIT: <sha or
+none>`, `EVIDENCE: <commands/results>` report when finished. Ordinary responses,
+questions, `ISSUES` and `BLOCKED` do not auto-publish. Appending clears a stale
+report. The plugin polls durable Home journals and retries publication after
+restart/lost replies. No push to main, arbitrary branch, force overwrite or merge
+is permitted. Core retains all existing exact-target/vault checks.
+
+Terminal delivery goes to the original requester with stable device/task event
+identity; acknowledgement is durable per task in Home. A crash between emitting
+and acknowledging can duplicate transport delivery (deduplicate event_id), but
+cannot duplicate task finalization. A sealed mandate alone is not proof of worker
+exit: cards expose cleanup pending; messages/acknowledgement require trusted
+supervisor receipts. An incomplete/crashed guardian or legacy untracked task is
+not silently declared stopped.
+
+Deploy matching Core, Home, `rubi-agent-exec` and this companion plugin together.
+No plugin release, live daemon update, account login or combined phone-to-PR e2e
+is performed by the source-only task UI slice. Legacy VM/microVM startup cleanup
+is deferred to a separate compatibility slice.

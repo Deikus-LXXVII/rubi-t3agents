@@ -107,6 +107,7 @@ func (s *sisters) agentLinkSection(ctx context.Context, h sisterHost) []map[stri
 			{"title": "Agent roles", "detail": "Profiles of a project with their own skills, tools and hosts: the roles of each project, what each has, its history with a one-click revert, and a button to start a session in one.", "actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageRoles}.open()}}},
 			{"title": "SSH targets", "detail": "Servers a role may run commands on, from your computer: add one (you confirm its host key), see which roles have it, remove it, and read what was run.", "actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageSSH}.open()}}},
 			{"title": "Usage and sign-in", "detail": "Today's estimate and whether Claude is signed in.", "actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageUsage}.open()}}},
+			{"title": "Repository tasks", "detail": "Private copies and sandboxed tasks: work, diff, test evidence and pull requests; append or stop from this page.", "actions": []map[string]any{{"label": "Open", "open": map[string]any{"page": "tasks"}}}},
 		}}}
 }
 

@@ -181,7 +181,7 @@ var mac = rubiplugin.HomeDevice{ID: "dev_mac", Name: "Mac"}
 
 func TestManifest(t *testing.T) {
 	m := manifest()
-	if m.ID != "t3agents" || m.Name != "T3 Agents" || len(m.Egress) != 0 || len(m.Secrets) != 0 || len(m.Home) != 2 || m.Home[0] != "t3-agent" || m.Home[1] != "t3-setup" || m.Hooks {
+	if m.ID != "t3agents" || m.Name != "T3 Agents" || len(m.Egress) != 0 || len(m.Secrets) != 1 || m.Secrets[0].Key != "github_token" || !m.Secrets[0].Optional || len(m.Home) != 2 || m.Home[0] != "t3-agent" || m.Home[1] != "t3-setup" || m.Hooks {
 		t.Fatalf("identity or permissions: %+v", m)
 	}
 	if m.Entry != "t3agents" || m.Source != "https://github.com/Deikus-LXXVII/rubi-t3agents" {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -85,7 +86,16 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		}
 	}
 	switch op {
+	case "task_stop", "task_append":
+		text := ""
+		if a.Text != nil {
+			text = *a.Text
+		}
+		return s.nativeTaskAction(ctx, h, strings.TrimPrefix(op, "task_"), nativeTaskIn{Device: a.Device, ID: a.ID, Text: text}, true)
 	case "view":
+		if a.Page == "tasks" {
+			return s.nativeTaskPage(ctx, h, a.Device)
+		}
 		if a.Page != "" {
 			return s.agentPage(ctx, h, panelPage{Page: a.Page, Device: a.Device, Project: a.Project, Session: a.SessionID, Role: a.Role, Version: a.Version, Target: a.Target})
 		}

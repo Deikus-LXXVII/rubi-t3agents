@@ -47,8 +47,11 @@ func manifest() rubiplugin.Manifest {
 		// Needs a Rubi that knows the "t3-agent" and "t3-setup" capabilities of Rubi Home; this plugin version must not be
 		// published before the Rubi release that has them.
 		MinRubi: "v0.14.0",
+		Fields:  []rubiplugin.Field{{Key: "github_label", Type: "text", Label: "Publication account label", Help: "Optional name; use the stable ID shown by t3agents_task_accounts in publish.account."}},
+		Secrets: []rubiplugin.Secret{{Key: "github_token", Label: "Fine-grained GitHub token (optional)", Optional: true, Help: "Leave blank for local tasks. Restrict to the approved repositories, Contents read/write and Pull requests read/write. Only Core resolves it at publish time; never paste it into a task or send it to the provider.", HelpURL: "https://github.com/settings/personal-access-tokens/new", HelpLink: "Create a fine-grained token"}},
 		Entry:   "t3agents",
 		Actions: []rubiplugin.Action{
+			{Kind: kindNativeTask, Title: "Run a sandboxed repository task", DefaultLevel: rubiplugin.Strong, Locked: true, Options: []rubiplugin.Option{{Key: "start", Label: "Start task", Meaning: "Create a private task copy and branch; sandboxed unattended work; publish only that branch and open a PR if an exact target is shown. Never merge."}}},
 			{Kind: kindRun, Title: "Run a command in a T3 thread", DefaultLevel: rubiplugin.Strong, Locked: true, Options: trust},
 			{Kind: kindRunBatch, Title: "Run several commands of one T3 thread (you tick the ones to allow)", DefaultLevel: rubiplugin.Strong, Locked: true, Options: trust},
 			// Read-only commands: a tap on the passkey is enough, no Face ID. (Chat would need the agent to
@@ -88,6 +91,7 @@ func manifest() rubiplugin.Manifest {
 				Options: []rubiplugin.Option{{Key: "project", Label: "Choose a folder", Meaning: "A folder chooser opens on that computer; the folder you pick becomes a project: Claude in its VM can read and write everything in it"}}},
 		},
 		Events: []rubiplugin.EventType{
+			{Type: eventNativeTask, Untrusted: []string{"work", "diff", "tests_reported_by_agent", "error"}},
 			{Type: eventNeeded, Untrusted: []string{"command", "directory", "claude_says", "computer"}},
 			{Type: eventBound, Untrusted: []string{"title", "directory", "project"}},
 			{Type: eventReply, Untrusted: []string{"text", "computer", "evidence"}},
@@ -106,6 +110,7 @@ func newPlugin() *rubiplugin.Plugin {
 	p := rubiplugin.New(manifest())
 	st := &store{}
 	sis := newSisters(st)
+	registerNativeTasks(p, sis)
 	var stop context.CancelFunc
 	var done chan struct{}
 	p.Start = func(h *rubiplugin.Host) error {
