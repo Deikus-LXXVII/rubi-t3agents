@@ -746,3 +746,47 @@ func TestSetupActionRefreshesUntilTheStatusChanges(t *testing.T) {
 		t.Fatalf("no starting notice: %s", blob)
 	}
 }
+
+func memorySection(t *testing.T, mp map[string]any) map[string]any {
+	t.Helper()
+	st := allDone()
+	if mp != nil {
+		st["memory_protection"] = mp
+	}
+	f, s := setupFixture(t, st)
+	for _, sec := range setupView(t, s, f)["sections"].([]map[string]any) {
+		if sec["title"] == "Memory protection" {
+			return sec
+		}
+	}
+	return nil
+}
+
+func TestSetupMemoryProtection(t *testing.T) {
+	if memorySection(t, nil) != nil || memorySection(t, map[string]any{"applies": false, "ok": true}) != nil {
+		t.Error("a memory section where Rubi Home doesn't check it")
+	}
+	item := func(sec map[string]any) map[string]any {
+		if sec == nil {
+			t.Fatal("no memory section")
+		}
+		return sec["items"].([]map[string]any)[0]
+	}
+	bad := item(memorySection(t, map[string]any{"applies": true, "ok": false, "reason": "ptrace_scope is 1 on this computer"}))
+	if bad["warn"] != true || !strings.Contains(bad["title"].(string), "won't unlock") || !strings.Contains(bad["detail"].(string), "ptrace_scope is 1") {
+		t.Errorf("not protected: %v", bad)
+	}
+	acc := item(memorySection(t, map[string]any{"applies": true, "ok": true, "accepted": true, "reason": "The owner accepted that root can read"}))
+	if acc["warn"] != nil || !strings.Contains(acc["title"].(string), "accepted the risk") {
+		t.Errorf("accepted: %v", acc)
+	}
+	good := memorySection(t, map[string]any{"applies": true, "ok": true, "reason": "No process can read another's memory"})
+	gi := item(good)
+	if gi["warn"] != nil || !strings.Contains(gi["title"].(string), "can be unlocked") {
+		t.Errorf("protected: %v", gi)
+	}
+	// Not a step: the panel counts a section whose first item repeats its title with a state.
+	if strings.HasPrefix(gi["title"].(string), good["title"].(string)+": ") {
+		t.Error("the memory section reads as a setup step")
+	}
+}

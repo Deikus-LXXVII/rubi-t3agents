@@ -76,6 +76,14 @@ type setupStatus struct {
 		WantsCode bool   `json:"wants_code"`
 		Role      string `json:"role"` // the role being signed in (t3-setup.login.* answer for the running sign-in)
 	} `json:"login"`
+	// MemoryProtection is how the computer keeps other processes from reading the agents' memory (Rubi Home on
+	// Linux; absent, or applies false, elsewhere). Project keys unlock only when OK.
+	MemoryProtection *struct {
+		Applies  bool   `json:"applies"`
+		OK       bool   `json:"ok"`
+		Accepted bool   `json:"accepted"`
+		Reason   string `json:"reason"`
+	} `json:"memory_protection"`
 }
 
 // decodeSetup reads a status answer leniently: a field of the wrong type is skipped, not fatal.
@@ -482,6 +490,9 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 		}
 		sections = append(sections, map[string]any{"title": title, "empty": "", "items": items})
 	}
+	if sec := setupMemorySection(st); sec != nil {
+		sections = append(sections, sec)
+	}
 	if folders != nil {
 		sections = append(sections, s.setupFoldersSection(*folders, d.ID, busy))
 	}
@@ -497,6 +508,23 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 		page["refresh"] = 3
 	}
 	return page, nil
+}
+
+// setupMemorySection shows the computer's memory protection where Rubi Home checks it. It is no setup step (its
+// item doesn't repeat the section title with a state), so the panel doesn't count it among the steps to finish.
+func setupMemorySection(st setupStatus) map[string]any {
+	mp := st.MemoryProtection
+	if mp == nil || !mp.Applies {
+		return nil
+	}
+	it := map[string]any{"title": "Project keys can be unlocked on this computer", "detail": oneLine(mp.Reason, 300)}
+	switch {
+	case !mp.OK:
+		it["title"], it["warn"] = "Project keys won't unlock on this computer", true
+	case mp.Accepted:
+		it["title"] = "Project keys can be unlocked here: you accepted the risk"
+	}
+	return map[string]any{"title": "Memory protection", "empty": "", "items": []map[string]any{it}}
 }
 
 // stepTitle is the name of a step: Rubi Home's own title, then the shared fallback.
