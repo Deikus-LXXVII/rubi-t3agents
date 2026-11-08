@@ -94,6 +94,9 @@ func requireNativeTasks(ctx context.Context, h homeCaller, device string) error 
 	if h.HomeCall(ctx, device, "t3-agent.task.capabilities", map[string]any{}, &c) != nil || c.Version != 1 || c.Supervision != 1 || !c.Supported {
 		return errors.New("task: update Rubi Core, Home and rubi-agent-exec together; supervised repository task API unavailable (no legacy start fallback)")
 	}
+	if !c.Autonomous {
+		return errors.New("task: this Home's existing policy does not permit unattended native full-access inside srt; choose a permitted Home in the panel. No settings were changed")
+	}
 	return nil
 }
 
