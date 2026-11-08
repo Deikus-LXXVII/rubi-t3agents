@@ -120,6 +120,9 @@ func (w *watcher) refresh(ctx context.Context) {
 				ids = append(ids, d.ID)
 			}
 		}
+		for _, id := range ids {
+			w.wg.Go(func() { w.s.nativeTaskTick(ctx, w.h, id) })
+		}
 		if len(ids) > 0 {
 			w.wg.Go(func() { w.s.libraryTick(ctx, w.h, ids) })
 			w.wg.Go(func() { w.s.sshAuditTick(ctx, w.h, ids) })

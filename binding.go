@@ -66,12 +66,13 @@ type sisterHost interface {
 // sisters holds what the tools and the watcher share besides the store: rate limits and the asks
 // handed out (so an answer can go to the session that asked).
 type sisters struct {
-	st   *store
-	mu   sync.Mutex
-	hits map[string][]time.Time
-	asks map[string]askRef
-	now  func() time.Time
-	loc  *time.Location // the zone a project trust's 04:00 is in (nil: this machine's)
+	nativeMu sync.Mutex
+	st       *store
+	mu       sync.Mutex
+	hits     map[string][]time.Time
+	asks     map[string]askRef
+	now      func() time.Time
+	loc      *time.Location // the zone a project trust's 04:00 is in (nil: this machine's)
 	// caps remembers which computers' Rubi Home has the t3-agent capability (agent.go).
 	roots map[string]rootEntry // project real paths (agent.go)
 	caps  map[string]capEntry

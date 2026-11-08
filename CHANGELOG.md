@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- One-confirmation native repository-task start/status/append/stop MCP tools and phone task cards, guarded by matching supervised Home capabilities. Linux-only repository tasks fail closed on unsupported/mixed installs.
+- Original-requester-only task results, durable Home delivery acknowledgements and automatic explicit-PASS finalization/publication retry, with stable at-least-once event IDs. Cards render agent text safely and label evidence as agent-reported.
+- Optional masked fine-grained GitHub publication account setup; only Core resolves the vault token at use time. No token goes into task/provider state. Existing standalone session actions remain.
+
 - The setup page shows a computer's memory protection where Rubi Home checks it (on Linux): whether project keys can be unlocked there, whether that rests on your accepted risk, and why not. It is a note, not a setup step.
 
 ## v0.2.0

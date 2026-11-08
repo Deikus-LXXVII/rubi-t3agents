@@ -500,6 +500,8 @@ func (s *sisters) routeAgent(ctx context.Context, h sisterHost, d rubiplugin.Hom
 	}
 	target := s.agentBinding(d.ID, it.Project, it.Role, it.SessionID)
 	switch it.Kind {
+	case "task_result":
+		s.nativeTaskTick(ctx, h, d.ID)
 	case "result", "sister_reply":
 		if it.Text == "" || target == nil || it.To == "" || !sameBot(it.To, target.Sister) {
 			return
