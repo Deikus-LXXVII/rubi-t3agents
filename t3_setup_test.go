@@ -222,3 +222,34 @@ func TestT3SetupNeedsItsOwnCapability(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeSetupNeedsNoRetiredContainerAndCannotInstallOne(t *testing.T) {
+	st := t3Status()
+	st["backend"] = "host-sandbox"
+	st["steps"] = st["steps"].([]map[string]any)[3:]
+	f, s := setupFixture(t, st)
+	actions := allActions(setupView(t, s, f))
+	if actions["Set up everything"] == nil {
+		t.Fatal("native setup is blocked by absent container step")
+	}
+	args := json.RawMessage(`{"device":"dev_mac","step":"all"}`)
+	if _, err := s.panel(context.Background(), f, "setup_run", args); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.setup.called(opSetupRun)
+	if len(calls) != 1 || calls[0]["step"] != "all" || len(f.submits) != 0 {
+		t.Fatal("native setup attempted legacy installation")
+	}
+	if _, err := s.panel(context.Background(), f, "setup_install", json.RawMessage(`{"device":"dev_mac"}`)); err == nil || !strings.Contains(err.Error(), "retired") {
+		t.Fatalf("retired native install: %v", err)
+	}
+	if len(f.submits) != 0 {
+		t.Fatal("retired install asked for approval")
+	}
+	// Unknown/older Home still cannot bypass its installer approval gate.
+	delete(st, "backend")
+	f.setup.status = st
+	if _, err := s.panel(context.Background(), f, "setup_run", args); err == nil {
+		t.Fatal("unknown backend bypassed legacy approval gate")
+	}
+}

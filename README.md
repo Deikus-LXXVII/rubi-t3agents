@@ -1,3 +1,5 @@
+> Native T3 repository tasks now use per-project host sandboxes, not VMs. Repository tasks require Linux; unsupported legacy SDK/VM execution and VM sign-in refuse explicitly in matching Home. Native provider credentials must be provisioned explicitly. Some historical sections below describe the retired SDK workflow, not current native task setup. See the Home rollout checklist (`docs/releases/t3-agents-rollout.md` in the Rubi repository).
+
 # T3 Agents for Rubi
 
 A [Rubi](https://github.com/Deikus-LXXVII/rubi) plugin. Your Bots start and steer agent threads that run in

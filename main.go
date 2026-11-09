@@ -40,8 +40,8 @@ func manifest() rubiplugin.Manifest {
 	// with -ldflags).
 	return rubiplugin.Manifest{
 		ID: "t3agents", Name: "T3 Agents", Version: "v0.2.0",
-		Description: "Bots start and steer agent threads that run in T3 Code on your computer, each in a role VM; you approve what matters.",
-		Needs:       "Rubi Home on the computer that runs T3 Code, with the T3 Agents setup done (container tool, runner image, T3 installed and paired, a sign-in per role).",
+		Description: "Bots start and steer native T3 tasks in per-project host sandboxes; you approve what matters.",
+		Needs:       "Matching Rubi Home with native T3 installed and paired, sandbox runtime dependencies, and explicitly provisioned provider credentials. Repository tasks require Linux.",
 		Publisher:   rubiplugin.Publisher{Name: "Rubi-Project", Key: PublisherKey},
 		Source:      "https://github.com/Deikus-LXXVII/rubi-t3agents",
 		// Needs a Rubi that knows the "t3-agent" and "t3-setup" capabilities of Rubi Home; this plugin version must not be

@@ -66,8 +66,9 @@ type setupStep struct {
 }
 
 type setupStatus struct {
-	Steps []setupStep `json:"steps"`
-	Job   *struct {
+	Backend string      `json:"backend"`
+	Steps   []setupStep `json:"steps"`
+	Job     *struct {
 		Step    string `json:"step"`
 		Project string `json:"project"`
 	} `json:"job"`
@@ -238,7 +239,7 @@ func (s *sisters) setupDevice(ctx context.Context, h sisterHost, device string) 
 func (s *sisters) setupLinkSection(ctx context.Context, h sisterHost) []map[string]any {
 	var items []map[string]any
 	for _, d := range s.setupDevices(ctx, h) {
-		items = append(items, map[string]any{"title": "Set up T3 Agents", "detail": oneLine("On "+d.Name+": Apple's container tool, the runner image, T3 (installed and pinned, then paired), each role's sign-in and a self-test, with buttons only.", 300),
+		items = append(items, map[string]any{"title": "Set up T3 Agents", "detail": oneLine("On "+d.Name+": native T3 (installed and pinned, then paired), per-project host sandbox and explicit provider credentials.", 300),
 			"actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageSetup, Device: d.ID}.open()}}})
 	}
 	if len(items) == 0 {
@@ -350,11 +351,14 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 	}
 	var topActions []map[string]any
 	c, cok := st.step("container")
-	if !busy && cok && c.State == "done" {
+	if !busy && (st.Backend == "host-sandbox" || (cok && c.State == "done")) {
 		topActions = append(topActions, act("Set up everything", "setup_run", map[string]any{"device": d.ID, "step": "all"}))
 	}
 	topActions = append(topActions, map[string]any{"label": "Refresh", "open": panelPage{Page: pageSetup, Device: d.ID}.open()})
 	allNote := "\"Set up everything\" appears once the container tool is done: that step asks for your approval, and it never skips it."
+	if st.Backend == "host-sandbox" {
+		allNote = "Set up native T3 and pairing. Agents run in per-project host sandboxes; provider credentials are provisioned explicitly, never imported from the operator's HOME."
+	}
 	sections := []map[string]any{{"title": "Setup", "note": allNote, "empty": "Nothing is running now.", "items": top, "actions": topActions}}
 
 	// The folders the agents work in are no step of the setup: a Bot adds one when the user asks it
@@ -503,7 +507,7 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 		sections = append(sections, sec)
 	}
 	page := map[string]any{"title": "Set up T3 Agents: " + oneLine(d.Name, 60), "up": upMain,
-		"note": "T3 runs on that computer and each role has its own VM. A role signs in to its provider on its own (Claude's `claude auth login`): this page only relays the sign-in link and the code you paste to Rubi Home on that computer. Installing the container tool shows macOS's own administrator dialog on the computer: this page never asks for a password, and it asks for your strong approval first. The folders the agents work in are added by your Grok Bot when you ask it, each with your strong approval.", "sections": sections}
+		"note": "Native T3 runs alongside Rubi. Each project is confined by its host sandbox; provider credentials must be provisioned explicitly. Legacy VM sign-in and self-test may be unavailable. Project folders are added only with your approval; no host profile is imported.", "sections": sections}
 	if busy || st.Login != nil || watching {
 		page["refresh"] = 3
 	}
@@ -565,6 +569,13 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 	d.Name = oneLine(d.Name, 60)
 	switch op {
 	case "setup_install":
+		st, err := s.setupStatus(ctx, h, d.ID, true)
+		if err != nil {
+			return nil, err
+		}
+		if st.Backend == "host-sandbox" {
+			return nil, errors.New("VM installation was retired; set up native T3 instead")
+		}
 		return s.askSetup(ctx, h, d, kindSetupInstall, "Install Apple's container tool on "+d.Name,
 			"Rubi Home on that computer downloads Apple's signed container installer (a pinned release, checked by size, hash and signature) and installs it. macOS then shows its own administrator dialog on that computer.")
 	case "setup_add":
@@ -600,7 +611,7 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 				return nil, errors.New("couldn't read the setup status: " + oneLine(err.Error(), 160))
 			}
 			c, cok := st.step("container")
-			if !cok || c.State != "done" {
+			if st.Backend != "host-sandbox" && (!cok || c.State != "done") {
 				return nil, errors.New("install the container tool first: it asks for your approval")
 			}
 		default:

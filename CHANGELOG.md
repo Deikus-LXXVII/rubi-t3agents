@@ -1,3 +1,8 @@
+## Unreleased — native sandbox setup
+
+- Native Home setup (`backend: host-sandbox`) offers Set up everything without installing the retired container tool; older Home retains its approval gate.
+- Setup and plugin descriptions explain native sandboxes and explicit provider credentials rather than claiming VM isolation.
+
 # Changelog
 
 ## Unreleased
