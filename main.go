@@ -39,14 +39,14 @@ func manifest() rubiplugin.Manifest {
 	// Version is the last release; a release build replaces it with its tag (rubiplugin.Version, set
 	// with -ldflags).
 	return rubiplugin.Manifest{
-		ID: "t3agents", Name: "T3 Agents", Version: "v0.2.0",
+		ID: "t3agents", Name: "T3 Agents", Version: "v0.3.0",
 		Description: "Bots start and steer native T3 tasks in per-project host sandboxes; you approve what matters.",
 		Needs:       "Matching Rubi Home with native T3 installed and paired, sandbox runtime dependencies, and explicitly provisioned provider credentials. Repository tasks require Linux.",
 		Publisher:   rubiplugin.Publisher{Name: "Rubi-Project", Key: PublisherKey},
 		Source:      "https://github.com/Deikus-LXXVII/rubi-t3agents",
-		// Needs a Rubi that knows the "t3-agent" and "t3-setup" capabilities of Rubi Home; this plugin version must not be
-		// published before the Rubi release that has them.
-		MinRubi: "v0.14.0",
+		// Needs Rubi v0.15.0 (native host-sandbox Home and supervised repository tasks); this plugin
+		// version must not be published before that Rubi release.
+		MinRubi: "v0.15.0",
 		Fields:  []rubiplugin.Field{{Key: "github_label", Type: "text", Label: "Publication account label", Help: "Optional name; use the stable ID shown by t3agents_task_accounts in publish.account."}},
 		Secrets: []rubiplugin.Secret{{Key: "github_token", Label: "Fine-grained GitHub token (optional)", Optional: true, Help: "Leave blank for local tasks. Restrict to the approved repositories, Contents read/write and Pull requests read/write. Only Core resolves it at publish time; never paste it into a task or send it to the provider.", HelpURL: "https://github.com/settings/personal-access-tokens/new", HelpLink: "Create a fine-grained token"}},
 		Entry:   "t3agents",
